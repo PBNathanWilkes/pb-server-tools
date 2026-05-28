@@ -521,3 +521,19 @@ Switch to `dist-upgrade` for kernel changes.
 ## [3.0.0] — prior series (reference only)
 
 Security updates separation, reboot detection, unattended-upgrades integration.
+
+## [Unreleased — next patch]
+
+### Removed
+
+- `src/login-compliance-check.sh` — canonical copy moved to
+  `login-compliance/src/`. Deployed by `login-compliance/install.sh`.
+- `tests/unit/test_login_compliance.sh` — canonical copy moved to
+  `login-compliance/tests/unit/`. Owned by the `login-compliance` component.
+- `tests/unit/debug_t04.sh` — development scratch file, not part of the
+  test suite.
+
+### Changed
+
+- `install.sh`: removed login-compliance deploy step, test invocation,
+  `BIN_DIR` constant, and header comment referencing `/usr/local/bin/`.

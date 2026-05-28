@@ -16,7 +16,7 @@
 #   /usr/local/libexec/pb-maintenance/   check-for-updates.sh (0750 root:root)
 #                                        pb-apt-evaluator.py   (0750 root:root)
 #                                        pb-patch-reporter.sh  (0750 root:root)
-#   /usr/local/bin/                      login-compliance-check.sh (0755 root:root)
+
 #   /var/lib/pb-maintenance/             state directory (0755 root:root)
 #   /etc/systemd/system/                 pb-check-for-updates{,-monthly}.{service,timer}
 
@@ -31,7 +31,6 @@ readonly SYSTEMD_SRC="${SCRIPT_DIR}/systemd"
 readonly TESTS_DIR="${SCRIPT_DIR}/tests/unit"
 
 readonly LIBEXEC_DIR="/usr/local/libexec/pb-maintenance"
-readonly BIN_DIR="/usr/local/bin"
 readonly STATE_DIR="/var/lib/pb-maintenance"
 readonly SYSTEMD_DEST="/etc/systemd/system"
 
@@ -96,11 +95,6 @@ run_tests() {
     || die "Reporter tests failed — aborting deployment"
   ok "test_pb_patch_reporter.sh passed"
 
-  # Login-check Bash tests
-  printf '  >> test_login_compliance.sh\n'
-  sudo -u "$test_user" bash "${TESTS_DIR}/test_login_compliance.sh" \
-    || die "Login-compliance tests failed — aborting deployment"
-  ok "test_login_compliance.sh passed"
 }
 
 # ---------------------------------------------------------------------------
@@ -156,13 +150,6 @@ deploy_files() {
     "${SRC_DIR}/pb-patch-reporter.sh" \
     "${LIBEXEC_DIR}/pb-patch-reporter.sh"
   ok "${LIBEXEC_DIR}/pb-patch-reporter.sh"
-
-  # --- login check ---
-  # /usr/local/bin is shared; deploy only this project's file.
-  install -m 0755 -o root -g root \
-    "${SRC_DIR}/login-compliance-check.sh" \
-    "${BIN_DIR}/login-compliance-check.sh"
-  ok "${BIN_DIR}/login-compliance-check.sh"
 
   # --- state directory (world-readable so login check works as any user) ---
   install -d -m 0755 -o root -g root "${STATE_DIR}"

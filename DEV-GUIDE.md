@@ -105,7 +105,7 @@ component's `DEV-GUIDE.md`.
 
 | KFC # | Component | Description | Status |
 |-------|-----------|-------------|--------|
-| KFC-R01 | login-compliance | `test_login_compliance.sh` exists in both `check-for-updates/tests/unit/` (original) and `login-compliance/tests/unit/` (new). The two files must stay in sync when login-compliance logic changes. Consider a single canonical copy in a future refactor. | Open |
+| KFC-R01 | login-compliance | `test_login_compliance.sh` and `login-compliance-check.sh` existed in both `check-for-updates/` and `login-compliance/`. Duplicates removed; canonical copies now in `login-compliance/` only. | Closed |
 
 ---
 
