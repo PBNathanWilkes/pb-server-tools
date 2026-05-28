@@ -1,0 +1,11 @@
+[Unit]
+Description=PB - Timer for daily update check
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+RandomizedDelaySec=10m
+AccuracySec=1m
+
+[Install]
+WantedBy=timers.target

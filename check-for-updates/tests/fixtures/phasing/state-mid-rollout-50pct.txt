@@ -1,0 +1,18 @@
+# fixture: state-mid-rollout-50pct.txt
+# State: Package at mid-rollout (e.g. 50%).
+# apt-cache policy output characteristic: "(phased 50%)" tag present on the
+# candidate version line in the Version table block.
+# DepCache.phasing_applied() returns True for hosts not in the rollout cohort.
+# v3.x behaviour: Filter worked when text matched (v3.10.15 case-insensitive filter).
+# v4.2 expected: Package excluded via DepCache.phasing_applied() == True.
+# Fallback path: is_phased_via_policy_fallback detects "(phased 50%)" in version table.
+#
+# Source: representative output from PBWEBSRV03 when open-vm-tools was at ~50% rollout.
+open-vm-tools:
+  Installed: 2:13.0.0-2~ubuntu0.24.04.1
+  Candidate: 2:13.0.0-3~ubuntu0.24.04.1
+  Version table:
+     2:13.0.0-3~ubuntu0.24.04.1 500 (phased 50%)
+        500 http://ca.archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 2:13.0.0-2~ubuntu0.24.04.1 100
+        100 /var/lib/dpkg/status

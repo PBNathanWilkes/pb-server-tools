@@ -1,0 +1,19 @@
+# fixture: state-0pct-not-yet-phased.txt
+# State: Package not yet included in phased rollout (0% rollout).
+# apt-cache policy output characteristic: no (phased N%) tag because the
+# package is not even listed as a candidate for this host (not in version table
+# as upgradable), OR the tag is absent because rollout has not started.
+# DepCache.phasing_applied() returns False because there is no candidate.
+# DepCache.is_upgradable() returns False.
+# v3.x behaviour: Correct — package not in dist-upgrade -s Inst output.
+# v4.2 expected: Package excluded (is_upgradable == False; never reaches phasing check).
+#
+# Source: captured pattern from apt-cache policy on a package held back entirely.
+open-vm-tools:
+  Installed: 2:13.0.0-2~ubuntu0.24.04.1
+  Candidate: 2:13.0.0-2~ubuntu0.24.04.1
+  Version table:
+ *** 2:13.0.0-2~ubuntu0.24.04.1 500
+        500 http://ca.archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://ca.archive.ubuntu.com/ubuntu noble-security/main amd64 Packages
+        100 /var/lib/dpkg/status

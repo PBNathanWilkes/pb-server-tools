@@ -1,0 +1,23 @@
+# fixture: state-non-phased.txt
+# State: Normal (non-phased) package update.
+# apt-cache policy output characteristic: no "(phased N%)" tag anywhere.
+# DepCache.phasing_applied() returns False.
+# DepCache.is_upgradable() returns True.
+#
+# v3.x behaviour: Correct — package included in upgrade list.
+# v4.2 expected: Package INCLUDED. phasing_applied() returns False.
+#
+# This fixture is the baseline correctness case. A phasing-detection regression
+# that accidentally excludes non-phased packages would fail this fixture.
+#
+# Source: representative output from PBWEBSRV03 for curl (normal update, not phased).
+curl:
+  Installed: 8.5.0-2ubuntu10.8
+  Candidate: 8.5.0-2ubuntu10.9
+  Version table:
+     8.5.0-2ubuntu10.9 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+        500 http://ca.archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 8.5.0-2ubuntu10.8 500
+        500 http://ca.archive.ubuntu.com/ubuntu noble/main amd64 Packages
+        100 /var/lib/dpkg/status

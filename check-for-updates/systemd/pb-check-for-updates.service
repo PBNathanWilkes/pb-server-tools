@@ -1,0 +1,35 @@
+[Unit]
+Description=PB - Check for Ubuntu updates (daily check)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0027
+
+Environment="PB_SYSTEMD_UNIT=pb-check-for-updates.service"
+
+StandardInput=null
+TimeoutStartSec=15min
+KillMode=control-group
+
+SupplementaryGroups=msmtp
+
+ExecStart=/usr/local/libexec/pb-maintenance/check-for-updates.sh --check
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pb-check-for-updates
+
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+ProtectSystem=strict
+
+ReadOnlyPaths=/usr/local/libexec/pb-maintenance
+ReadWritePaths=/etc/msmtp /backup/patch-logs /tmp /var/lib/apt/lists /var/cache/apt /var/lib/dpkg /var/log/apt /var/lib/pb-maintenance /var/log/msmtp

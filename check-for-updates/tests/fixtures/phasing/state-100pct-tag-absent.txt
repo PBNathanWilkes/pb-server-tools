@@ -1,0 +1,30 @@
+# fixture: state-100pct-tag-absent.txt
+# State: Package at 100% rollout — tag has been PURGED from metadata.
+# apt-cache policy output characteristic: NO "(phased N%)" tag on the candidate
+# version line. The version appears identical to a normal (non-phased) update.
+# DepCache.phasing_applied() returns False (rollout complete; all hosts included).
+# DepCache.is_upgradable() returns True.
+#
+# This is the root-cause state that defeated all five v3.x phasing filters:
+#   - v3.10.0 text filter: tag absent → filter not triggered → package included → FALSE POSITIVE
+#   - v3.10.15 case-insensitive filter: same failure mode
+#   - v3.10.16 PrivateTmp fix: unrelated to this state
+#   - v3.10.17 single-invocation fix: unrelated to this state
+#
+# v4.2 expected: Package INCLUDED (correctly). phasing_applied() returns False
+# because the package is genuinely installable on all hosts. This state must
+# NOT produce a false-positive exclusion. Tests must assert the package IS in
+# the output, not absent from it.
+#
+# This is the critical fixture that was never tested in v3.x development.
+# All future phasing-detection changes must pass this fixture.
+#
+# Source: representative output from PBWEBSRV03 after open-vm-tools reached 100% rollout.
+open-vm-tools:
+  Installed: 2:13.0.0-2~ubuntu0.24.04.1
+  Candidate: 2:13.0.0-3~ubuntu0.24.04.1
+  Version table:
+     2:13.0.0-3~ubuntu0.24.04.1 500
+        500 http://ca.archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 2:13.0.0-2~ubuntu0.24.04.1 100
+        100 /var/lib/dpkg/status

@@ -1,0 +1,37 @@
+[Unit]
+Description=PB - Security hardening check (monthly compliance report)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0027
+Environment=SYSTEMD_UNIT=%n
+StandardInput=null
+TimeoutStartSec=15min
+KillMode=process
+
+SupplementaryGroups=msmtp
+ExecPaths=/bin /usr/bin
+
+ExecStart=/usr/local/libexec/pb-maintenance/security-hardening-check.sh --monthly
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pb-security-hardening-monthly
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+LockPersonality=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+ProtectSystem=strict
+
+ReadWritePaths=/backup/security-logs /tmp /etc/msmtp
