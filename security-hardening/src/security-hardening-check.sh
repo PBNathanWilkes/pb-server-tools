@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # security-hardening-check.sh — Check security hardening status and email a report (HTML)
 # Executed via systemd timers (cron no longer used). Requires: mailx (s-nail/bsd-mailx), msmtp (or other MTA)
-# v2.1.10
+# v2.1.15
 #
 # DISTRIBUTION COMPATIBILITY:
 # Primary: Ubuntu Server (all versions with systemd)
@@ -10,6 +10,7 @@
 # Note: Raspberry Pi OS-specific considerations are noted throughout the script
 #
 # VERSION HISTORY (for maintainers):
+# v2.1.15 - Bugfix: Password Policy check now verifies both libpam-pwquality installed and pwquality.conf present; Sudo logging check now scans /etc/sudoers.d/ drop-in files (not only /etc/sudoers)
 # v2.1.14 - Bugfix: Fix cleanup() to use if-then instead of && chain; && returning false triggered ERR trap under set -e on second EXIT trap call
 # v2.1.13 - Bugfix: Remove pkill block entirely; KillMode=process in service file makes it redundant and it caused set -e to trigger exit 1 under systemd
 # v2.1.10 - Final polish: align header version, remove unused vars, ShellCheck clean
@@ -741,7 +742,7 @@ check_password_policy() {
     # RHEL/Fedora: libpwquality package, config at /etc/security/pwquality.conf
     # SUSE: pam_pwquality, config at /etc/security/pwquality.conf
     # All use same config file location when pwquality is installed
-    if [[ -f /etc/security/pwquality.conf ]]; then
+    if dpkg -l libpam-pwquality &>/dev/null && [[ -f /etc/security/pwquality.conf ]]; then
         details+="  pwquality.conf found@@N@@"
         
         # Check key password requirements
@@ -964,12 +965,13 @@ check_sudo_configuration() {
             done < <(echo "$all_all_entries")
         fi
         
-        # Check if sudo logging is enabled
+        # Check if sudo logging is enabled (covers /etc/sudoers and all drop-in files)
         local sudo_log
-        sudo_log="$(grep -E "^Defaults.*logfile" /etc/sudoers 2>/dev/null || echo "")"
-        
+        sudo_log="$(grep -rE '^[[:space:]]*Defaults[[:space:]]+.*logfile' \
+            /etc/sudoers /etc/sudoers.d/ 2>/dev/null || echo "")"
+
         if [[ -n "$sudo_log" ]]; then
-            details+="  ✓ Sudo logging enabled: $sudo_log@@N@@"
+            details+="  ✓ Sudo logging enabled: $(echo "$sudo_log" | head -1)@@N@@"
         else
             status="WARN"
             issues=$((issues + 1))

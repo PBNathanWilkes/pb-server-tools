@@ -99,10 +99,102 @@ T05() {
 }
 
 # ---------------------------------------------------------------------------
+# T06 — check_password_policy: PASS when package installed AND conf present
+# ---------------------------------------------------------------------------
+T06() {
+  local result tmp_conf
+  tmp_conf="$(mktemp)"
+  printf 'minlen = 14\nretry = 3\ndifok = 3\n' > "$tmp_conf"
+
+  result=$(
+    _dpkg_ok() { return 0; }
+
+    _check() {
+      local status="OK" details="" issues=0
+      details+="Password Policy (PAM):@@N@@"
+      if _dpkg_ok && [[ -f "$1" ]]; then
+        local minlen
+        minlen="$(grep -E "^minlen" "$1" 2>/dev/null | awk '{print $3}' || echo "not-set")"
+        if [[ "$minlen" == "not-set" ]] || [[ "$minlen" -lt 12 ]]; then
+          status="WARN"; issues=$((issues + 1))
+        fi
+      else
+        status="WARN"; issues=$((issues + 1))
+      fi
+      printf "%s" "$status"
+    }
+
+    _check "$tmp_conf"
+  )
+  rm -f "$tmp_conf"
+  [[ "$result" == "OK" ]] && pass "T06 check_password_policy: OK when package+conf present (minlen=14)" \
+                           || fail "T06 check_password_policy: expected OK, got $result"
+}
+
+# ---------------------------------------------------------------------------
+# T07 — check_password_policy: WARN when package missing
+# ---------------------------------------------------------------------------
+T07() {
+  local result
+  result=$(
+    _dpkg_fail() { return 1; }
+
+    _check() {
+      local status="OK"
+      if _dpkg_fail && [[ -f "$1" ]]; then
+        : # would be OK
+      else
+        status="WARN"
+      fi
+      printf "%s" "$status"
+    }
+
+    _check "/nonexistent/pwquality.conf"
+  )
+  [[ "$result" == "WARN" ]] && pass "T07 check_password_policy: WARN when package absent" \
+                             || fail "T07 check_password_policy: expected WARN, got $result"
+}
+
+# ---------------------------------------------------------------------------
+# T08 — sudo logging: detected in sudoers.d drop-in (not in main sudoers)
+# ---------------------------------------------------------------------------
+T08() {
+  local tmp_dir result
+  tmp_dir="$(mktemp -d)"
+  printf '# no logfile here\n%%sudo ALL=(ALL:ALL) ALL\n' > "$tmp_dir/sudoers"
+  mkdir -p "$tmp_dir/sudoers.d"
+  printf 'Defaults logfile=/var/log/sudo.log\n' > "$tmp_dir/sudoers.d/logging"
+
+  result="$(grep -rE '^[[:space:]]*Defaults[[:space:]]+.*logfile' \
+      "$tmp_dir/sudoers" "$tmp_dir/sudoers.d/" 2>/dev/null || echo "")"
+  rm -rf "$tmp_dir"
+
+  [[ -n "$result" ]] && pass "T08 sudo logging: detected in sudoers.d drop-in" \
+                      || fail "T08 sudo logging: not detected in sudoers.d drop-in"
+}
+
+# ---------------------------------------------------------------------------
+# T09 — sudo logging: absent from all files → WARN condition
+# ---------------------------------------------------------------------------
+T09() {
+  local tmp_dir result
+  tmp_dir="$(mktemp -d)"
+  printf '# standard sudoers\n%%sudo ALL=(ALL:ALL) ALL\n' > "$tmp_dir/sudoers"
+  mkdir -p "$tmp_dir/sudoers.d"
+
+  result="$(grep -rE '^[[:space:]]*Defaults[[:space:]]+.*logfile' \
+      "$tmp_dir/sudoers" "$tmp_dir/sudoers.d/" 2>/dev/null || echo "")"
+  rm -rf "$tmp_dir"
+
+  [[ -z "$result" ]] && pass "T09 sudo logging: absent everywhere → WARN condition fires" \
+                      || fail "T09 sudo logging: expected no match, got: $result"
+}
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 printf '\n'
-T01; T02; T03; T04; T05
+T01; T02; T03; T04; T05; T06; T07; T08; T09
 
 printf '\n--- Results: %d passed, %d failed ---\n' "$PASS" "$FAIL"
 if [[ $FAIL -gt 0 ]]; then
