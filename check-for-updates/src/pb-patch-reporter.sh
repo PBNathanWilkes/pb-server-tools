@@ -31,7 +31,8 @@ LOG_DIR="${LOG_DIR:-/backup/patch-logs}"
 APT_STAMP="${APT_STAMP:-/var/lib/apt/lists/pb-last-update}"
 readonly STATE_DIR STATE_FILE STATE_LOCK SUPP_FILE SUPP_LOCK LOG_DIR APT_STAMP
 
-FROM_EMAIL="${FROM_EMAIL:-$(hostname) <donotreply@pbhcorp.com>}"RECIPIENTS_NORMAL="${RECIPIENTS_NORMAL:-nathan.wilkes@pbhcorp.com}"
+FROM_EMAIL="${FROM_EMAIL:-$(hostname) <donotreply@pbhcorp.com>}"
+RECIPIENTS_NORMAL="${RECIPIENTS_NORMAL:-nathan.wilkes@pbhcorp.com}"
 RECIPIENTS_VALIDATE="${RECIPIENTS_VALIDATE:-nathan.wilkes@pbhcorp.com}"
 RECIPIENTS_MONTHLY="${RECIPIENTS_MONTHLY:-nathan.wilkes@pbhcorp.com support@pbhcorp.com}"
 readonly FROM_EMAIL RECIPIENTS_NORMAL RECIPIENTS_VALIDATE RECIPIENTS_MONTHLY
