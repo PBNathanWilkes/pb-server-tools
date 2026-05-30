@@ -23,6 +23,7 @@ require mount namespace support are:
 | Directive | Requires |
 |-----------|----------|
 | `ProtectSystem=strict` | `CLONE_NEWNS` (re-mounts `/usr`, `/boot`, `/etc` read-only) |
+| `ProtectHome=true` | `CLONE_NEWNS` (re-mounts `/home`, `/root`, `/run/user` inaccessible) |
 | `PrivateTmp=true` | `CLONE_NEWNS` (private `/tmp` via tmpfs) |
 | `ProtectKernelModules=true` | `CLONE_NEWNS` + `CAP_SYS_MODULE` restriction |
 | `ProtectKernelTunables=true` | `CLONE_NEWNS` (read-only bind of `/proc/sys`, `/sys`) |
@@ -46,9 +47,6 @@ All other sandbox directives that do not require mount namespaces are
 retained from the base unit:
 
 - `NoNewPrivileges=true` — syscall-level, no namespace required
-- `ProtectHome=true` — requires namespace; **retained in base but may also fail**
-  on some restricted hosts. If exit 226 recurs after this fix, add
-  `ProtectHome=` to the drop-ins as well (see Troubleshooting below).
 - `LockPersonality=true` — `SECBIT_NO_SETUID_FIXUP`, no namespace required
 - `RestrictRealtime=true` — seccomp, no namespace required
 - `RestrictSUIDSGID=true` — seccomp, no namespace required

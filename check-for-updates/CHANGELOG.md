@@ -4,7 +4,28 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [4.2.17] — 2026-05-30
+## [4.2.18] — 2026-05-30
+
+### Fixed
+
+- `overrides/pblinuxutility/pb-check-for-updates*.service.d/no-namespace.conf`:
+  added `ProtectHome=` reset. `ProtectHome=true` requires a mount namespace
+  (`CLONE_NEWNS`) and was confirmed to also cause exit 226 on pblinuxutility
+  after the v4.2.17 drop-ins were deployed. The four directives now reset are:
+  `ProtectSystem=`, `ProtectHome=`, `ProtectKernelModules=`,
+  `ProtectKernelTunables=`.
+
+### Files changed
+
+- `overrides/pblinuxutility/pb-check-for-updates.service.d/no-namespace.conf`
+- `overrides/pblinuxutility/pb-check-for-updates-monthly.service.d/no-namespace.conf`
+- `overrides/pblinuxutility/README.md`
+- `DEV-GUIDE.md` (KFC-R02 updated)
+- `CHANGELOG.md` (this file)
+
+---
+
+
 
 ### Fixed
 

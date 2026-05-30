@@ -4,7 +4,28 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [2.1.22] — 2026-05-30
+## [2.1.23] — 2026-05-30
+
+### Fixed
+
+- `overrides/pblinuxutility/pb-security-hardening-check*.service.d/no-namespace.conf`:
+  added `ProtectHome=` reset. `ProtectHome=true` requires a mount namespace
+  (`CLONE_NEWNS`) and was confirmed to also cause exit 226 on pblinuxutility
+  after the v2.1.22 drop-ins were deployed. The five directives now reset are:
+  `ProtectSystem=`, `ProtectHome=`, `PrivateTmp=`, `ProtectKernelModules=`,
+  `ProtectKernelTunables=`.
+
+### Files changed
+
+- `overrides/pblinuxutility/pb-security-hardening-check.service.d/no-namespace.conf`
+- `overrides/pblinuxutility/pb-security-hardening-check-monthly.service.d/no-namespace.conf`
+- `overrides/pblinuxutility/README.md`
+- `DEV-GUIDE.md` (KFC-R02 updated)
+- `CHANGELOG.md` (this file)
+
+---
+
+
 
 ### Fixed
 

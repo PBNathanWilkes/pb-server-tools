@@ -106,7 +106,7 @@ component's `DEV-GUIDE.md`.
 | KFC # | Component | Description | Status |
 |-------|-----------|-------------|--------|
 | KFC-R01 | login-compliance | `test_login_compliance.sh` and `login-compliance-check.sh` existed in both `check-for-updates/` and `login-compliance/`. Duplicates removed; canonical copies now in `login-compliance/` only. | Closed |
-| KFC-R02 | check-for-updates, security-hardening | Namespace-requiring sandbox directives (`ProtectSystem=strict`, `PrivateTmp=true`, `ProtectKernelModules=true`, `ProtectKernelTunables=true`) cause exit 226 (EXIT_NAMESPACE) on container/VM hosts that do not permit `CLONE_NEWNS`. Source unit files are correct for capable hosts. Fix: host-specific drop-in overrides under `overrides/<hostname>/` deployed by `install.sh` on matching hosts. See `overrides/pblinuxutility/README.md`. | Closed |
+| KFC-R02 | check-for-updates, security-hardening | Namespace-requiring sandbox directives (`ProtectSystem=strict`, `ProtectHome=true`, `PrivateTmp=true`, `ProtectKernelModules=true`, `ProtectKernelTunables=true`) cause exit 226 (EXIT_NAMESPACE) on container/VM hosts that do not permit `CLONE_NEWNS`. `ProtectHome=true` was initially omitted from the drop-ins; confirmed to also require a mount namespace on pblinuxutility. Source unit files are correct for capable hosts. Fix: host-specific drop-in overrides under `overrides/<hostname>/` deployed by `install.sh` on matching hosts. See `overrides/pblinuxutility/README.md`. | Closed |
 
 ---
 

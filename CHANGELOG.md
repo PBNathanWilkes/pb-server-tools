@@ -4,7 +4,30 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [1.0.1] — 2026-05-30
+## [1.0.2] — 2026-05-30
+
+### Fixed
+
+- `overrides/pblinuxutility/` drop-ins: added `ProtectHome=` reset to all
+  four no-namespace override files. `ProtectHome=true` was confirmed on
+  pblinuxutility to also require `CLONE_NEWNS`; exit 226 persisted after
+  v1.0.1 without this reset. KFC-R02 updated accordingly.
+
+### Files changed
+
+- `overrides/pblinuxutility/pb-check-for-updates.service.d/no-namespace.conf`
+- `overrides/pblinuxutility/pb-check-for-updates-monthly.service.d/no-namespace.conf`
+- `overrides/pblinuxutility/pb-security-hardening-check.service.d/no-namespace.conf`
+- `overrides/pblinuxutility/pb-security-hardening-check-monthly.service.d/no-namespace.conf`
+- `overrides/pblinuxutility/README.md`
+- `check-for-updates/CHANGELOG.md`
+- `security-hardening/CHANGELOG.md`
+- `DEV-GUIDE.md`
+- `CHANGELOG.md` (this file)
+
+---
+
+
 
 ### Fixed
 
