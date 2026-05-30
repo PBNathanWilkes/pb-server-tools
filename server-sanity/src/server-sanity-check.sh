@@ -3,10 +3,18 @@
 # server-sanity-check — PBWEBSRV03 infrastructure sanity check
 #
 # Checks the essential health of all three applications and the email stack.
-# Read-only: no emails sent, no services triggered, no state mutated.
+# Read-only: no services triggered, no state mutated.
 # Must run as root (sudo).
 #
-# Usage: sudo bash /opt/server-tools/server-sanity-check.sh
+# Usage:
+#   sudo server-sanity-check [--email-on-failure]
+#
+# Options:
+#   --email-on-failure
+#       After all checks complete, if any check FAILED (exit 1), email the
+#       full report to EMAIL_PRIMARY sourced from /etc/balena-monitor/config.
+#       Warnings (exit 0) do not trigger an email.  Intended for automated
+#       scheduled runs; see pb-server-sanity-check.timer.
 #
 # Exit codes:
 #   0 — all checks passed (warnings are acceptable)
@@ -23,6 +31,23 @@
 
 set -euo pipefail
 
+# ── Argument parsing ─────────────────────────────────────────────────────────
+_EMAIL_ON_FAILURE=0
+
+for _arg in "$@"; do
+  case "$_arg" in
+    --email-on-failure) _EMAIL_ON_FAILURE=1 ;;
+    --help|-h)
+      sed -n '/^# Usage:/,/^# Applications checked:/p' "$0" | sed 's/^# \?//'
+      exit 0
+      ;;
+    *)
+      printf 'Unknown option: %s\n' "$_arg" >&2
+      exit 2
+      ;;
+  esac
+done
+
 # ── Colour palette ──────────────────────────────────────────────────────────
 if [[ -t 1 ]]; then
   RED=$'\033[0;31m' GRN=$'\033[0;32m' YLW=$'\033[0;33m'
@@ -34,11 +59,22 @@ fi
 # ── Counters ─────────────────────────────────────────────────────────────────
 _pass=0; _fail=0; _warn=0
 
+# ── Output capture for --email-on-failure ────────────────────────────────────
+# When the flag is set we tee all stdout to a temp file so the email body
+# is available after the run.  The file is cleaned up on EXIT.
+_CAPTURE_FILE=''
+if (( _EMAIL_ON_FAILURE )); then
+  _CAPTURE_FILE=$(mktemp /tmp/server-sanity-XXXXXX.txt)
+  # Redirect stdout through tee; stderr goes to journal only (not emailed).
+  exec > >(tee -a "$_CAPTURE_FILE")
+  trap 'rm -f "$_CAPTURE_FILE"' EXIT
+fi
+
 # ── Primitives ───────────────────────────────────────────────────────────────
-_ok()   { printf "  ${GRN}✔${RST}  %s\n" "$*";           (( ++_pass )); }
-_fail() { printf "  ${RED}✘${RST}  %s\n" "$*";           (( ++_fail )); }
-_warn() { printf "  ${YLW}⚠${RST}  %s\n" "$*";           (( ++_warn )); }
-_head() { printf "\n${BOLD}${BLU}══ %s${RST}\n" "$*"; }
+_ok()   { printf "  %s✔%s  %s\n" "${GRN}" "${RST}" "$*"; (( ++_pass )); }
+_fail() { printf "  %s✘%s  %s\n" "${RED}" "${RST}" "$*"; (( ++_fail )); }
+_warn() { printf "  %s⚠%s  %s\n" "${YLW}" "${RST}" "$*"; (( ++_warn )); }
+_head() { printf "\n%s%s══ %s%s\n" "${BOLD}" "${BLU}" "$*" "${RST}"; }
 
 # ── Guards ───────────────────────────────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
@@ -48,8 +84,8 @@ fi
 
 _START=$(date +%s%N)
 
-printf "${BOLD}PBWEBSRV03 — Infrastructure Sanity Check${RST}\n"
-printf "$(date '+%Y-%m-%d %H:%M:%S %Z')\n"
+printf '%sPBWEBSRV03 — Infrastructure Sanity Check%s\n' "${BOLD}" "${RST}"
+printf '%s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
 
 # =============================================================================
 # Helper functions
@@ -440,14 +476,18 @@ if [[ -f $SP_CONF ]]; then
     [[ -z $_sp_val ]] && continue   # key-presence already checked above
     case $_sp_key in
       BM_STATE_DIR|EDM_STATE_DIR|EDM_LIB_DIR)
-        [[ -d $_sp_val ]] \
-          && _ok  "cross-ref: ${_sp_key}=${_sp_val}" \
-          || _fail "cross-ref: ${_sp_key}=${_sp_val}  (dir missing)"
+        if [[ -d $_sp_val ]]; then
+          _ok  "cross-ref: ${_sp_key}=${_sp_val}"
+        else
+          _fail "cross-ref: ${_sp_key}=${_sp_val}  (dir missing)"
+        fi
         ;;
       EDM_DOMAINS_FILE)
-        [[ -f $_sp_val ]] \
-          && _ok  "cross-ref: ${_sp_key}=${_sp_val}" \
-          || _fail "cross-ref: ${_sp_key}=${_sp_val}  (file missing)"
+        if [[ -f $_sp_val ]]; then
+          _ok  "cross-ref: ${_sp_key}=${_sp_val}"
+        else
+          _fail "cross-ref: ${_sp_key}=${_sp_val}  (file missing)"
+        fi
         ;;
     esac
   done <<< "$_sp_paths"
@@ -500,17 +540,62 @@ check_last_run pb-security-hardening-check.service
 _END=$(date +%s%N)
 _ELAPSED=$(( (_END - _START) / 1000000 ))
 
-printf "\n${BOLD}══ Summary${RST}\n"
-printf "  ${GRN}PASS: %d${RST}   ${RED}FAIL: %d${RST}   ${YLW}WARN: %d${RST}   (elapsed: %dms)\n\n" \
-  "$_pass" "$_fail" "$_warn" "$_ELAPSED"
+printf '\n%s══ Summary%s\n' "${BOLD}" "${RST}"
+printf '  %sPASS: %d%s   %sFAIL: %d%s   %sWARN: %d%s   (elapsed: %dms)\n\n' \
+  "${GRN}" "$_pass" "${RST}" "${RED}" "$_fail" "${RST}" "${YLW}" "$_warn" "${RST}" "$_ELAPSED"
 
 if (( _fail > 0 )); then
-  printf "${RED}${BOLD}NOT OK — %d check(s) failed${RST}\n\n" "$_fail"
-  exit 1
+  printf '%s%sNOT OK — %d check(s) failed%s\n\n' "${RED}" "${BOLD}" "$_fail" "${RST}"
+  _EXIT=1
 elif (( _warn > 0 )); then
-  printf "${YLW}${BOLD}OK with %d warning(s)${RST}\n\n" "$_warn"
-  exit 0
+  printf '%s%sOK with %d warning(s)%s\n\n' "${YLW}" "${BOLD}" "$_warn" "${RST}"
+  _EXIT=0
 else
-  printf "${GRN}${BOLD}ALL OK${RST}\n\n"
-  exit 0
+  printf '%s%sALL OK%s\n\n' "${GRN}" "${BOLD}" "${RST}"
+  _EXIT=0
 fi
+
+# =============================================================================
+# ── Email delivery (--email-on-failure) ──────────────────────────────────────
+# =============================================================================
+# Send the captured report if any check failed.  Warnings are not emailed —
+# transient warnings (e.g. msmtp first-run) should not generate noise.
+# EMAIL_PRIMARY is sourced from /etc/balena-monitor/config; if the file or
+# key is absent the email step is skipped with a warning to stderr.
+# =============================================================================
+if (( _EMAIL_ON_FAILURE && _fail > 0 )); then
+  _BM_CONF=/etc/balena-monitor/config
+  _email_to=''
+
+  if [[ -f $_BM_CONF ]]; then
+    _email_to=$(bash -c "source \"$_BM_CONF\" 2>/dev/null; printf '%s' \"\${EMAIL_PRIMARY:-}\"" 2>/dev/null || true)
+  fi
+
+  if [[ -z $_email_to ]]; then
+    printf 'server-sanity-check: --email-on-failure: EMAIL_PRIMARY not found in %s — skipping email\n' \
+      "$_BM_CONF" >&2
+  elif ! command -v msmtp >/dev/null 2>&1; then
+    printf 'server-sanity-check: --email-on-failure: msmtp not found — skipping email\n' >&2
+  else
+    _hostname=$(hostname -s 2>/dev/null || echo unknown)
+    _subject="[server-sanity] FAIL on ${_hostname} — ${_fail} check(s) failed"
+    _body_file=${_CAPTURE_FILE:-}
+
+    if [[ -n $_body_file && -f $_body_file ]]; then
+      # Strip ANSI colour codes so the email body is plain text.
+      _plain=$(sed 's/\x1b\[[0-9;]*m//g' "$_body_file")
+    else
+      _plain="(report capture unavailable)"
+    fi
+
+    if printf 'To: %s\nSubject: %s\nContent-Type: text/plain; charset=utf-8\n\n%s\n' \
+         "$_email_to" "$_subject" "$_plain" \
+         | msmtp "$_email_to" 2>/dev/null; then
+      printf 'server-sanity-check: failure report emailed to %s\n' "$_email_to" >&2
+    else
+      printf 'server-sanity-check: msmtp failed — failure report NOT delivered to %s\n' "$_email_to" >&2
+    fi
+  fi
+fi
+
+exit "$_EXIT"

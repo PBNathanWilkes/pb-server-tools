@@ -1,0 +1,14 @@
+[Unit]
+Description=PB - Timer for daily infrastructure sanity check
+
+[Timer]
+# 08:00 daily: after the 01:00–02:30 service windows have completed,
+# before the 09:00 windows fire.  Catches overnight failures with
+# enough lead time to investigate before business hours.
+OnCalendar=*-*-* 08:00:00
+Persistent=true
+RandomizedDelaySec=5m
+AccuracySec=1m
+
+[Install]
+WantedBy=timers.target

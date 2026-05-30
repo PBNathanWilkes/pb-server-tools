@@ -4,6 +4,29 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.6] — 2026-05-30
+
+### Added
+
+- `server-sanity` v1.1.0: `--email-on-failure` flag, `pb-server-sanity-check.service`
+  and `pb-server-sanity-check.timer` (daily 08:00 watchdog).  Addresses
+  OPEN-ITEM-server-sanity-scheduled-backstop: failures in any monitored service
+  now generate an email alert automatically without manual intervention.
+  No namespace-requiring sandbox directives in the new unit (avoids KFC-R02).
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/systemd/pb-server-sanity-check.service` — new
+- `server-sanity/systemd/pb-server-sanity-check.timer` — new
+- `server-sanity/install.sh`
+- `server-sanity/CHANGELOG.md`
+- `README.md`
+- `DEV-GUIDE.md`
+- `CHANGELOG.md` (this file)
+
+---
+
 ## [1.0.5] — 2026-05-30
 
 ### Fixed

@@ -4,6 +4,41 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.1.0] — 2026-05-30
+
+### Added
+
+- **`--email-on-failure` flag** (`server-sanity-check.sh`): when passed,
+  the full report is captured and emailed to `EMAIL_PRIMARY` (sourced from
+  `/etc/balena-monitor/config`) if any check FAILED (exit 1).  Warnings
+  (exit 0) do not trigger an email.  ANSI colour codes are stripped before
+  delivery.  If `EMAIL_PRIMARY` is absent or `msmtp` is unavailable, the
+  step is skipped with a diagnostic on stderr.
+- **`pb-server-sanity-check.service`** and **`pb-server-sanity-check.timer`**:
+  new systemd units that run `server-sanity-check --email-on-failure` daily
+  at 08:00, after the monitored service windows have completed and before the
+  09:00 windows fire.  Addresses the silent-failure gap identified in
+  OPEN-ITEM-server-sanity-scheduled-backstop.md.  No namespace-requiring
+  sandbox directives used (avoids KFC-R02 / EXIT_NAMESPACE on container/VM
+  hosts).  `SuccessExitStatus=0 1` so a detected failure does not mask the
+  next `check_last_run` result.
+- **`install.sh`**: updated to deploy and enable the new systemd units;
+  added verify step comparing deployed units to source; added `msmtp` to
+  prerequisite check.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/systemd/pb-server-sanity-check.service` — new
+- `server-sanity/systemd/pb-server-sanity-check.timer` — new
+- `server-sanity/install.sh`
+- `server-sanity/CHANGELOG.md`
+- `CHANGELOG.md` (repo)
+- `README.md`
+- `DEV-GUIDE.md`
+
+---
+
 ## [1.0.1] — 2026-05-30
 
 ### Fixed

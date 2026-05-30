@@ -80,6 +80,21 @@ invalidated when `check-for-updates` refreshes APT lists.
 - **Activation:** `.bashrc` snippet (printed during install; added manually)
 - **Version:** v0.9.0
 
+### server-sanity
+
+Read-only infrastructure sanity check. Verifies the health of all managed
+services (email stack, Email DNS Monitor, Balena Monitor, SharePoint Export,
+Server Tools) with colour-coded pass/fail/warn output. Runs in under 5 seconds.
+
+When run with `--email-on-failure`, emails the full report to `EMAIL_PRIMARY`
+(from `/etc/balena-monitor/config`) if any check fails.  The
+`pb-server-sanity-check.timer` schedules this daily at 08:00 as an automated
+watchdog.
+
+- **Script:** `/usr/local/bin/server-sanity-check`
+- **Timer:** `pb-server-sanity-check.timer` (daily 08:00)
+- **Version:** v1.1.0
+
 ---
 
 ## Production layout

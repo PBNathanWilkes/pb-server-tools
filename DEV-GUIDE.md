@@ -28,10 +28,16 @@ pb-server-tools/
 │   ├── systemd/
 │   └── tests/unit/
 │
-└── login-compliance/
+├── login-compliance/
+│   ├── install.sh
+│   ├── src/
+│   └── tests/unit/
+│
+└── server-sanity/
     ├── install.sh
+    ├── CHANGELOG.md
     ├── src/
-    └── tests/unit/
+    └── systemd/
 ```
 
 Each component is independently installable via its own `install.sh`.

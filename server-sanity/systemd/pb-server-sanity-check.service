@@ -1,0 +1,37 @@
+[Unit]
+Description=PB - Infrastructure sanity check (daily watchdog)
+# Runs after timers for the monitored services so it catches failures
+# from the preceding night's runs.
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0027
+StandardInput=null
+TimeoutStartSec=2min
+KillMode=process
+
+# Pass --email-on-failure so a failure alert is sent automatically.
+ExecStart=/usr/local/bin/server-sanity-check --email-on-failure
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pb-server-sanity
+
+# Sandbox: no namespace-requiring directives (avoids KFC-R02 / EXIT_NAMESPACE
+# on container/VM hosts).  The script runs as root and is read-only; minimal
+# hardening is applied without CLONE_NEWNS.
+NoNewPrivileges=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+
+# Exit 0 (all pass) and exit 0 with warnings are both success.
+# Exit 1 (failures detected) is also treated as success at the systemd level —
+# the email has already been sent; we do not want a service failure to mask the
+# content of the next check_last_run result.
+SuccessExitStatus=0 1
