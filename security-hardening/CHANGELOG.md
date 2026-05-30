@@ -4,6 +4,52 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.1.20] — 2026-05-29
+
+### Fixed
+
+- **`check_ssh_security()`: `AllowUsers`/`AllowGroups` now aggregates all
+  matching lines from `sshd -T` output.**
+  When `AllowUsers` entries are specified across separate drop-in files,
+  OpenSSH emits one `allowusers <user>` line per entry in `sshd -T` output:
+  ```
+  allowusers nathan
+  allowusers golan
+  ```
+  The previous `_ssh_val` helper used `awk` with `exit` on first match,
+  returning only `nathan` and silently dropping `golan`. The checker then
+  reported `AllowUsers: nathan` and suppressed the WARN — masking the fact
+  that the allowlist appeared configured when only one of the intended users
+  was visible.
+
+  Added `_ssh_val_all` helper that collects all values across every matching
+  line (space-joined). `AllowUsers` and `AllowGroups` now use `_ssh_val_all`.
+
+### Tests
+
+- `tests/unit/test_security_hardening.sh`: added T25.
+  T25: `_ssh_val_all` with two `allowusers` lines returns both users
+  space-joined; regression guard against first-match-only lookup.
+
+### KFC — new entry
+
+**KFC-SH03** (security-hardening component, `check_ssh_security`)
+
+- **Version observed:** v2.1.16–v2.1.19
+- **Failure mode:** `AllowUsers`/`AllowGroups` checked via `_ssh_val`
+  (first-match awk). When users are in separate drop-ins, `sshd -T` emits
+  one `allowusers` line per user. Only the first is returned; the rest are
+  silently dropped. Checker reports the allowlist as configured (✓) based
+  on the first user alone, masking missing entries.
+- **Root cause:** `awk '...{print $2; exit}'` exits after the first match.
+  Multi-line directives require aggregation across all matching lines.
+- **Fix applied:** v2.1.20 — `_ssh_val_all` collects all values; used for
+  `AllowUsers` and `AllowGroups`.
+- **Current-version mitigation:** T25 guards against regression to
+  single-match lookup for allow-list directives.
+
+---
+
 ## [2.1.19] — 2026-05-29
 
 ### Fixed

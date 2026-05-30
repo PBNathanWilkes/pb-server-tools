@@ -498,12 +498,36 @@ T24() {
 }
 
 # ---------------------------------------------------------------------------
+# T25 — AllowUsers multi-line aggregation: _ssh_val_all collects all users
+#       Regression guard: sshd -T emits one allowusers line per drop-in;
+#       _ssh_val (first-match) would silently drop all but the first user.
+# ---------------------------------------------------------------------------
+T25() {
+  local result
+  result=$(
+    effective_config="allowusers nathan
+allowusers golan"
+    _grep_mode=false
+    _ssh_val_all() {
+      local key="$1"
+      printf '%s' "$effective_config" | awk -v k="${key,,}" \
+        'tolower($1)==k { for (i=2; i<=NF; i++) vals[n++]=$i }
+         END { for (i=0; i<n; i++) printf "%s%s", (i?" ":""), vals[i]; printf "\n" }'
+    }
+    _ssh_val_all AllowUsers
+  )
+  [[ "$result" == "nathan golan" ]] \
+    && pass "T25 AllowUsers multi-line: both users aggregated by _ssh_val_all" \
+    || fail "T25 AllowUsers multi-line: expected 'nathan golan', got '$result'"
+}
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 printf '\n'
 T01; T02; T03; T04; T05; T06; T07; T08; T09
 T10; T11; T12; T13; T14; T15; T16; T17; T18; T19; T20
-T21; T22; T23; T24
+T21; T22; T23; T24; T25
 
 printf '\n--- Results: %d passed, %d failed ---\n' "$PASS" "$FAIL"
 if [[ $FAIL -gt 0 ]]; then

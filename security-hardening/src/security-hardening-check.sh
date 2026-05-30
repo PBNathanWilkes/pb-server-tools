@@ -10,6 +10,12 @@
 # Note: Raspberry Pi OS-specific considerations are noted throughout the script
 #
 # VERSION HISTORY (for maintainers):
+# v2.1.20 - Bugfix: AllowUsers/AllowGroups check used _ssh_val (first-match awk) to
+#            retrieve allow-list entries. When users are specified across separate
+#            drop-in files, sshd -T emits one "allowusers <user>" line per drop-in;
+#            only the first user was returned and the rest silently dropped. Added
+#            _ssh_val_all helper that aggregates all matching lines, and switched
+#            AllowUsers/AllowGroups lookups to use it.
 # v2.1.19 - Bugfix: sshd -T probe used '| head -1 >/dev/null' to test if sshd -T succeeded.
 #            sshd -T emits ~150 lines; head -1 reads one line and exits, sending SIGPIPE
 #            (exit 141) to sshd.  Under set -o pipefail the pipe exits 141 (non-zero),
@@ -17,8 +23,7 @@
 #            and the fallback to sshd_config file-grep always fired — silently missing all
 #            drop-in directives.  Fixed by capturing output directly in a single $()
 #            assignment with || true, and testing emptiness afterward.
-# v2.1.18 - Bugfix: sshd -T invocation now includes -C context flags
-#            (user=root,host=localhost,addr=127.0.0.1,laddr=127.0.0.1,lport=22).
+# v2.1.18 - Bugfix: sshd -T invocation now includes -C context flags (user=root,host=localhost,addr=127.0.0.1,laddr=127.0.0.1,lport=22).
 #            OpenSSH >=6.5 requires a synthetic connection context when any Match
 #            block is present; without -C, sshd -T exits non-zero even when sshd
 #            is healthy, causing a false fallback to file-grep that silently misses
@@ -77,7 +82,7 @@ set -Eeuo pipefail
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
-readonly VERSION="2.1.19"
+readonly VERSION="2.1.20"
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
 readonly PATH="/usr/sbin:/usr/bin:/sbin:/bin"
@@ -347,8 +352,9 @@ check_ssh_security() {
         local _grep_mode=false
     fi
 
-    # Helper: extract a value from sshd -T output (lowercase directive names)
-    # or from raw sshd_config (mixed case, leading whitespace).
+    # Helper: extract a single value from sshd -T output (lowercase directive
+    # names) or from raw sshd_config (mixed case, leading whitespace).
+    # Returns the value from the FIRST matching line only.
     _ssh_val() {
         local key="$1"
         if [[ "$_grep_mode" == "false" ]]; then
@@ -356,6 +362,26 @@ check_ssh_security() {
             printf '%s' "$effective_config" | awk -v k="${key,,}" 'tolower($1)==k{print $2; exit}'
         else
             printf '%s' "$effective_config" | grep -Ei "^[[:space:]]*${key}[[:space:]]" | awk '{print $2}' | head -1
+        fi
+    }
+
+    # Helper: collect ALL values for a directive across every matching line,
+    # space-joined into a single string.
+    # Required for AllowUsers / AllowGroups: OpenSSH emits one line per entry
+    # when users were specified in separate drop-in files, e.g.:
+    #   allowusers nathan
+    #   allowusers golan
+    # Using _ssh_val (first-match only) would silently drop all but the first.
+    _ssh_val_all() {
+        local key="$1"
+        if [[ "$_grep_mode" == "false" ]]; then
+            printf '%s' "$effective_config" | awk -v k="${key,,}" \
+                'tolower($1)==k { for (i=2; i<=NF; i++) vals[n++]=$i }
+                 END { for (i=0; i<n; i++) printf "%s%s", (i?" ":""), vals[i]; printf "\n" }'
+        else
+            printf '%s' "$effective_config" \
+                | grep -Ei "^[[:space:]]*${key}[[:space:]]" \
+                | awk '{ for (i=2; i<=NF; i++) printf "%s%s", (printed++?" ":""), $i } END { printf "\n" }'
         fi
     }
 
@@ -457,8 +483,8 @@ check_ssh_security() {
 
     # --- AllowUsers / AllowGroups (allowlist) ---
     local allow_users allow_groups
-    allow_users="$(_ssh_val AllowUsers)"
-    allow_groups="$(_ssh_val AllowGroups)"
+    allow_users="$(_ssh_val_all AllowUsers)"
+    allow_groups="$(_ssh_val_all AllowGroups)"
     if [[ -n "$allow_users" ]]; then
         details+="  AllowUsers: $allow_users@@N@@"
         details+="  ✓ Login restricted to named users@@N@@"
