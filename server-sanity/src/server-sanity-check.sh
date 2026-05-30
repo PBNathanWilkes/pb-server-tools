@@ -22,11 +22,16 @@
 #   2 — must run as root
 #
 # Applications checked:
-#   • Email stack (msmtp)
-#   • Email DNS Monitor  (/opt/email-dns-monitor)
-#   • Balena Monitor     (/opt/balena-monitor)
-#   • SharePoint Export  (/opt/sharepoint-export)
+#   • Email stack (msmtp)                          — always checked
+#   • Email DNS Monitor  (/opt/email-dns-monitor)  — skipped if not installed
+#   • Balena Monitor     (/opt/balena-monitor)      — skipped if not installed
+#   • SharePoint Export  (/opt/sharepoint-export)  — skipped if not installed
 #   • Server Tools       (/usr/local/libexec/pb-maintenance)
+#   • lighttpd                                      — always checked
+#
+# Optional sections (2–4) are guarded by their /opt install root: if the
+# directory is absent the section prints "not installed" and no counters
+# are incremented.
 # =============================================================================
 
 set -euo pipefail
@@ -265,6 +270,8 @@ check_last_run() {
 }
 
 # check_no_lockfile <path>
+_skip() { printf "  ⊘  %s\n" "$*"; }
+
 check_no_lockfile() {
   local lf=$1
   if [[ -f $lf ]]; then
@@ -278,6 +285,47 @@ check_no_lockfile() {
     fi
   else
     _ok  "no stale lock file"
+  fi
+}
+
+
+# check_cert_expiry <host> <port>
+# Connects to host:port, retrieves the TLS certificate, and checks expiry.
+# Thresholds: ≤7 days → _fail; ≤30 days → _warn; otherwise → _ok.
+# Requires openssl in PATH.  If the connection fails, emits _fail.
+check_cert_expiry() {
+  local host=$1 port=$2
+
+  if ! command -v openssl >/dev/null 2>&1; then
+    _warn "cert expiry: openssl not found — skipping ${host}:${port}"
+    return
+  fi
+
+  local enddate
+  enddate=$(openssl s_client -connect "${host}:${port}" -servername "$host" \
+              </dev/null 2>/dev/null \
+            | openssl x509 -noout -enddate 2>/dev/null \
+            | sed 's/notAfter=//')
+
+  if [[ -z $enddate ]]; then
+    _fail "cert expiry: could not retrieve certificate for ${host}:${port}"
+    return
+  fi
+
+  local expiry_epoch now_epoch days_left
+  expiry_epoch=$(date -d "$enddate" +%s 2>/dev/null)
+  if [[ -z $expiry_epoch ]]; then
+    _fail "cert expiry: could not parse expiry date for ${host}:${port} (${enddate})"
+    return
+  fi
+
+  now_epoch=$(date +%s)
+  days_left=$(( (expiry_epoch - now_epoch) / 86400 ))
+
+  if   (( days_left <= 0 ));  then _fail "cert expiry: ${host}:${port} — EXPIRED  (${enddate})"
+  elif (( days_left <= 7 ));  then _fail "cert expiry: ${host}:${port} — ${days_left}d remaining  (${enddate})"
+  elif (( days_left <= 30 )); then _warn "cert expiry: ${host}:${port} — ${days_left}d remaining  (${enddate})"
+  else                              _ok   "cert expiry: ${host}:${port} — ${days_left}d remaining  (${enddate})"
   fi
 }
 
@@ -340,48 +388,55 @@ fi
 _head "Email DNS Monitor"
 
 EDM_INSTALL=/opt/email-dns-monitor
-EDM_BIN=/usr/local/bin/email-dns-monitor
-EDM_CONF=/etc/email-dns-monitor/email-dns-monitor.conf
-EDM_STATE=/var/lib/email-dns-monitor
-EDM_BACKUP=/var/backups/email-dns-monitor
-EDM_LOG=/var/log/email-dns-monitor
-EDM_DOMAINS_JSON=${EDM_INSTALL}/domains/domains.json
 
-check_binary email-dns-monitor
-check_symlink_target "$EDM_BIN"
-check_user emaildns
-check_dir  "$EDM_INSTALL"     "install root"
-check_file "$EDM_CONF"        "config"
-check_conf_syntax "$EDM_CONF"
-check_dir  "$EDM_STATE"           "state dir"
-check_dir  "$EDM_STATE/history"   "state/history"
-check_dir  "$EDM_STATE/domains"   "state/domains"
-check_dir_owner "$EDM_STATE"  emaildns
-check_dir  "$EDM_LOG"             "log dir"
-check_dir  "$EDM_BACKUP"          "backup dir"
-check_dir  "$EDM_BACKUP/history"  "backup/history"
-check_file "$EDM_DOMAINS_JSON" "domains/domains.json"
+if [[ -d $EDM_INSTALL ]]; then
 
-# Validate domains.json is non-empty valid JSON
-if [[ -f $EDM_DOMAINS_JSON ]]; then
-  if jq -e . "$EDM_DOMAINS_JSON" >/dev/null 2>&1; then
-    domain_count=$(jq '[.domains[]? | select(.enabled == true)] | length' "$EDM_DOMAINS_JSON" 2>/dev/null || echo "?")
-    _ok  "domains.json: valid JSON  ($domain_count enabled domains)"
-  else
-    _fail "domains.json: invalid JSON — $EDM_DOMAINS_JSON"
+  EDM_BIN=/usr/local/bin/email-dns-monitor
+  EDM_CONF=/etc/email-dns-monitor/email-dns-monitor.conf
+  EDM_STATE=/var/lib/email-dns-monitor
+  EDM_BACKUP=/var/backups/email-dns-monitor
+  EDM_LOG=/var/log/email-dns-monitor
+  EDM_DOMAINS_JSON=${EDM_INSTALL}/domains/domains.json
+
+  check_binary email-dns-monitor
+  check_symlink_target "$EDM_BIN"
+  check_user emaildns
+  check_dir  "$EDM_INSTALL"     "install root"
+  check_file "$EDM_CONF"        "config"
+  check_conf_syntax "$EDM_CONF"
+  check_dir  "$EDM_STATE"           "state dir"
+  check_dir  "$EDM_STATE/history"   "state/history"
+  check_dir  "$EDM_STATE/domains"   "state/domains"
+  check_dir_owner "$EDM_STATE"  emaildns
+  check_dir  "$EDM_LOG"             "log dir"
+  check_dir  "$EDM_BACKUP"          "backup dir"
+  check_dir  "$EDM_BACKUP/history"  "backup/history"
+  check_file "$EDM_DOMAINS_JSON" "domains/domains.json"
+
+  # Validate domains.json is non-empty valid JSON
+  if [[ -f $EDM_DOMAINS_JSON ]]; then
+    if jq -e . "$EDM_DOMAINS_JSON" >/dev/null 2>&1; then
+      domain_count=$(jq '[.domains[]? | select(.enabled == true)] | length' "$EDM_DOMAINS_JSON" 2>/dev/null || echo "?")
+      _ok  "domains.json: valid JSON  ($domain_count enabled domains)"
+    else
+      _fail "domains.json: invalid JSON — $EDM_DOMAINS_JSON"
+    fi
   fi
+
+  check_no_lockfile "${EDM_STATE}/monitor.lock"
+
+  check_conf_keys "$EDM_CONF" \
+    ALERT_EMAILS SUMMARY_EMAILS MAIL_TRANSPORT OBSERVATION_MINUTES \
+    PARALLEL_QUERIES MAX_ALERTS_PER_RUN DNS_FAILURE_ALERT_THRESHOLD \
+    HISTORY_RETAIN_DAYS
+
+  # Primary timer + last run
+  check_timer   email-dns-monitor.timer
+  check_last_run email-dns-monitor.service
+
+else
+  _skip "not installed on this host (${EDM_INSTALL} absent)"
 fi
-
-check_no_lockfile "${EDM_STATE}/monitor.lock"
-
-check_conf_keys "$EDM_CONF" \
-  ALERT_EMAILS SUMMARY_EMAILS MAIL_TRANSPORT OBSERVATION_MINUTES \
-  PARALLEL_QUERIES MAX_ALERTS_PER_RUN DNS_FAILURE_ALERT_THRESHOLD \
-  HISTORY_RETAIN_DAYS
-
-# Primary timer + last run
-check_timer   email-dns-monitor.timer
-check_last_run email-dns-monitor.service
 
 
 # =============================================================================
@@ -390,40 +445,47 @@ check_last_run email-dns-monitor.service
 _head "Balena Monitor"
 
 BM_INSTALL=/opt/balena-monitor
-BM_BIN=/usr/local/bin/balena-monitor
-BM_CONF=/etc/balena-monitor/config
-BM_STATE=/var/lib/balena-monitor
-BM_LOG=/var/log/balena-monitor
-BM_SPOOL=/var/spool/balena-reports
 
-check_binary balena-monitor
-check_symlink_target "$BM_BIN"
-check_user balena-monitor
-check_dir  "$BM_INSTALL"  "install root"
-check_file "$BM_CONF"     "config"
-check_conf_syntax "$BM_CONF"
-check_dir  "$BM_STATE"    "state dir"
-check_dir  "$BM_LOG"      "log dir"
-check_dir  "$BM_SPOOL"    "spool dir"
-check_dir_owner "$BM_STATE" balena-monitor
+if [[ -d $BM_INSTALL ]]; then
 
-check_conf_keys "$BM_CONF" \
-  BALENA_API_URL BALENA_API_TOKEN BALENA_FLEET_ID
+  BM_BIN=/usr/local/bin/balena-monitor
+  BM_CONF=/etc/balena-monitor/config
+  BM_STATE=/var/lib/balena-monitor
+  BM_LOG=/var/log/balena-monitor
+  BM_SPOOL=/var/spool/balena-reports
 
-# State file written after first run
-BM_FHH=${BM_STATE}/fleet_health_history.json
-if [[ -f $BM_FHH ]]; then
-  if jq -e . "$BM_FHH" >/dev/null 2>&1; then
-    _ok  "state:   fleet_health_history.json  (valid JSON)"
+  check_binary balena-monitor
+  check_symlink_target "$BM_BIN"
+  check_user balena-monitor
+  check_dir  "$BM_INSTALL"  "install root"
+  check_file "$BM_CONF"     "config"
+  check_conf_syntax "$BM_CONF"
+  check_dir  "$BM_STATE"    "state dir"
+  check_dir  "$BM_LOG"      "log dir"
+  check_dir  "$BM_SPOOL"    "spool dir"
+  check_dir_owner "$BM_STATE" balena-monitor
+
+  check_conf_keys "$BM_CONF" \
+    BALENA_API_URL BALENA_API_TOKEN BALENA_FLEET_ID
+
+  # State file written after first run
+  BM_FHH=${BM_STATE}/fleet_health_history.json
+  if [[ -f $BM_FHH ]]; then
+    if jq -e . "$BM_FHH" >/dev/null 2>&1; then
+      _ok  "state:   fleet_health_history.json  (valid JSON)"
+    else
+      _fail "state:   fleet_health_history.json  (invalid JSON)"
+    fi
   else
-    _fail "state:   fleet_health_history.json  (invalid JSON)"
+    _warn "state:   fleet_health_history.json not present (written after first run)"
   fi
-else
-  _warn "state:   fleet_health_history.json not present (written after first run)"
-fi
 
-check_timer    balena-monitor-daily.timer
-check_last_run balena-monitor-daily.service
+  check_timer    balena-monitor-daily.timer
+  check_last_run balena-monitor-daily.service
+
+else
+  _skip "not installed on this host (${BM_INSTALL} absent)"
+fi
 
 
 # =============================================================================
@@ -432,37 +494,39 @@ check_last_run balena-monitor-daily.service
 _head "SharePoint Export"
 
 SP_INSTALL=/opt/sharepoint-export
-SP_BIN=/usr/local/bin/sharepoint-export
-SP_CONF=/etc/sharepoint-export/config
-SP_STATE=/var/lib/sharepoint-export
-SP_EXPORT_DIR=/var/lib/sharepoint-export/export
-SP_ARCHIVE_DIR=/var/backups/sharepoint-export
-SP_LOG=/var/log/sharepoint-export
-SP_LOCK_DIR=/var/lock/sharepoint-export
 
-check_binary sharepoint-export
-check_symlink_target "$SP_BIN"
-check_user sp-export
-check_dir  "$SP_INSTALL"      "install root"
-check_file "$SP_CONF"         "config"
-check_conf_syntax "$SP_CONF"
-# Config must be 0600 owned by sp-export (install requirement)
-check_file_mode "$SP_CONF" 600 sp-export
-check_dir  "$SP_STATE"        "state dir"
-check_dir  "$SP_EXPORT_DIR"   "state/export"
-check_dir  "$SP_ARCHIVE_DIR"  "backup/archive dir"
-check_dir  "$SP_LOG"          "log dir"
-check_dir  "$SP_LOCK_DIR"     "lock dir"
-check_dir_owner "$SP_STATE" sp-export
+if [[ -d $SP_INSTALL ]]; then
 
-check_conf_keys "$SP_CONF" \
-  AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET \
-  SHAREPOINT_SITE_ID \
-  BM_STATE_DIR EDM_STATE_DIR EDM_LIB_DIR EDM_DOMAINS_FILE \
-  ALERT_EMAIL EMAIL_FROM
+  SP_BIN=/usr/local/bin/sharepoint-export
+  SP_CONF=/etc/sharepoint-export/config
+  SP_STATE=/var/lib/sharepoint-export
+  SP_EXPORT_DIR=/var/lib/sharepoint-export/export
+  SP_ARCHIVE_DIR=/var/backups/sharepoint-export
+  SP_LOG=/var/log/sharepoint-export
+  SP_LOCK_DIR=/var/lock/sharepoint-export
 
-# Cross-app path validation: source config once and check the 4 path references.
-if [[ -f $SP_CONF ]]; then
+  check_binary sharepoint-export
+  check_symlink_target "$SP_BIN"
+  check_user sp-export
+  check_dir  "$SP_INSTALL"      "install root"
+  check_file "$SP_CONF"         "config"
+  check_conf_syntax "$SP_CONF"
+  # Config must be 0600 owned by sp-export (install requirement)
+  check_file_mode "$SP_CONF" 600 sp-export
+  check_dir  "$SP_STATE"        "state dir"
+  check_dir  "$SP_EXPORT_DIR"   "state/export"
+  check_dir  "$SP_ARCHIVE_DIR"  "backup/archive dir"
+  check_dir  "$SP_LOG"          "log dir"
+  check_dir  "$SP_LOCK_DIR"     "lock dir"
+  check_dir_owner "$SP_STATE" sp-export
+
+  check_conf_keys "$SP_CONF" \
+    AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET \
+    SHAREPOINT_SITE_ID \
+    BM_STATE_DIR EDM_STATE_DIR EDM_LIB_DIR EDM_DOMAINS_FILE \
+    ALERT_EMAIL EMAIL_FROM
+
+  # Cross-app path validation: source config once and check the 4 path references.
   # Single subshell: source config once, emit all 4 path values on separate lines.
   _sp_paths=$(bash -c "
     source \"$SP_CONF\" 2>/dev/null
@@ -491,10 +555,13 @@ if [[ -f $SP_CONF ]]; then
         ;;
     esac
   done <<< "$_sp_paths"
-fi
 
-check_timer    sharepoint-export-daily.timer
-check_last_run sharepoint-export-daily.service
+  check_timer    sharepoint-export-daily.timer
+  check_last_run sharepoint-export-daily.service
+
+else
+  _skip "not installed on this host (${SP_INSTALL} absent)"
+fi
 
 
 # =============================================================================
@@ -532,6 +599,42 @@ check_timer    pb-check-for-updates.timer
 check_timer    pb-security-hardening-check.timer
 check_last_run pb-check-for-updates.service
 check_last_run pb-security-hardening-check.service
+
+
+# =============================================================================
+# ── SECTION 6: lighttpd ───────────────────────────────────────────────────────
+# =============================================================================
+_head "lighttpd"
+
+LIGHTTPD_CONF=/etc/lighttpd/lighttpd.conf
+LIGHTTPD_LOG=/var/log/lighttpd
+
+check_binary lighttpd
+
+# Service state
+_lighty_state=$(systemctl is-active lighttpd 2>/dev/null || echo "inactive")
+if [[ $_lighty_state == "active" ]]; then
+  _ok  "service: lighttpd  (active)"
+else
+  _fail "service: lighttpd  (state: ${_lighty_state})"
+fi
+
+# Config syntax
+check_file "$LIGHTTPD_CONF" "/etc/lighttpd/lighttpd.conf"
+if [[ -f $LIGHTTPD_CONF ]]; then
+  if lighttpd -t -f "$LIGHTTPD_CONF" >/dev/null 2>&1; then
+    _ok  "config syntax OK: lighttpd.conf"
+  else
+    _fail "config syntax error: lighttpd.conf"
+  fi
+fi
+
+check_dir "$LIGHTTPD_LOG" "/var/log/lighttpd"
+
+check_last_run lighttpd.service
+
+# TLS certificate expiry
+check_cert_expiry premiumbrandsholdings.com 443
 
 
 # =============================================================================

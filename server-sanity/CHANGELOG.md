@@ -4,6 +4,33 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.2.0] — 2026-05-30
+
+### Added
+
+- **Optional-section guards (sections 2–4):** Email DNS Monitor, Balena
+  Monitor, and SharePoint Export are now skipped with a `⊘ not installed`
+  notice when their `/opt/<app>` install root is absent.  No counters are
+  incremented for skipped sections.  Sentinel is the install root directory
+  (not the binary symlink) because a broken symlink would still satisfy
+  `command -v`.
+- **`check_cert_expiry <host> <port>` helper:** connects live via
+  `openssl s_client`, extracts the TLS certificate expiry date, and emits
+  `_fail` (≤7 days or already expired), `_warn` (≤30 days), or `_ok`.
+  Days remaining and the raw `notAfter` date are always shown.
+- **`_skip` primitive:** prints a `⊘` line without incrementing any counter.
+- **Section 6 — lighttpd:** binary present; `systemctl is-active` check;
+  config syntax via `lighttpd -t`; `/var/log/lighttpd` directory; last
+  service run; TLS cert expiry for `premiumbrandsholdings.com:443`.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md`
+- `CHANGELOG.md` (repo)
+
+---
+
 ## [1.1.1] — 2026-05-30
 
 ### Fixed

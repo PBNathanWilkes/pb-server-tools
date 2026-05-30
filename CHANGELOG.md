@@ -4,6 +4,23 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.8] — 2026-05-30
+
+### Added
+
+- `server-sanity` v1.2.0: optional-section guards for EDM/Balena/SharePoint
+  (skipped when `/opt/<app>` absent); `check_cert_expiry` helper; `_skip`
+  primitive; Section 6 lighttpd (service state, config syntax, log dir, last
+  run, TLS cert expiry for `premiumbrandsholdings.com:443`).
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md`
+- `CHANGELOG.md` (this file)
+
+---
+
 ## [1.0.7] — 2026-05-30
 
 ### Fixed
