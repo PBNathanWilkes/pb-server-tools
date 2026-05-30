@@ -4,6 +4,24 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.1.1] — 2026-05-30
+
+### Fixed
+
+- **`server-sanity-check.sh`:** runtime banner and file header comment used
+  the hard-coded hostname `PBWEBSRV03` instead of the runtime value.
+  Banner now calls `$(hostname -s)`; header comment is now generic.  The
+  `--email-on-failure` subject line already used `$(hostname -s)` correctly
+  and is unchanged.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md`
+- `CHANGELOG.md` (repo)
+
+---
+
 ## [1.1.0] — 2026-05-30
 
 ### Added

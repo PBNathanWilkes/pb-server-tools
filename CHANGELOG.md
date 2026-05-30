@@ -4,6 +4,22 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.7] — 2026-05-30
+
+### Fixed
+
+- `server-sanity` v1.1.1: replaced hard-coded `PBWEBSRV03` hostname in the
+  runtime banner with `$(hostname -s)`.  The script now works correctly on
+  any host without modification.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md`
+- `CHANGELOG.md` (this file)
+
+---
+
 ## [1.0.6] — 2026-05-30
 
 ### Added

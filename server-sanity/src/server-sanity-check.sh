@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# server-sanity-check — PBWEBSRV03 infrastructure sanity check
+# server-sanity-check — infrastructure sanity check
 #
 # Checks the essential health of all three applications and the email stack.
 # Read-only: no services triggered, no state mutated.
@@ -84,7 +84,7 @@ fi
 
 _START=$(date +%s%N)
 
-printf '%sPBWEBSRV03 — Infrastructure Sanity Check%s\n' "${BOLD}" "${RST}"
+printf '%s%s — Infrastructure Sanity Check%s\n' "${BOLD}" "$(hostname -s)" "${RST}"
 printf '%s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
 
 # =============================================================================
