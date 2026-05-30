@@ -4,6 +4,32 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.0] — 2026-05-30
+
+### Changed
+
+- **`check_cert_expiry` → `check_cert_expiry_file`:** abandoned the
+  `openssl s_client` network approach entirely.  PBWEBSRV03 has outbound
+  port 443 blocked (hairpin NAT / egress firewall), so the TCP connection
+  times out after 15s regardless of flags.  The new helper reads the PEM
+  file directly from disk with `openssl x509 -noout -enddate -in <file>`,
+  which returns in milliseconds and is more reliable (checks the cert
+  actually loaded by lighttpd, not what the network sees).
+- **Multi-cert scanner:** the lighttpd section now extracts all `ssl.pemfile`
+  paths from `/etc/lighttpd/lighttpd.conf` at runtime (deduplicated), and
+  checks each one.  On PBWEBSRV03 this covers `premiumbrandsholdings.com`,
+  `www`, `beta`, `alpha`, `legacy`, `creeksidefoods.com`, and
+  `gloriasbestoffresh.com` automatically.  No cert path is hard-coded.
+  Label shown is the Let's Encrypt domain directory name.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md`
+- `CHANGELOG.md` (repo)
+
+---
+
 ## [1.2.4] — 2026-05-30
 
 ### Fixed

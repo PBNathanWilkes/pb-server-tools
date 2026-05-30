@@ -4,6 +4,23 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.13] — 2026-05-30
+
+### Changed
+
+- `server-sanity` v1.3.0: replaced `openssl s_client` network cert check
+  with direct PEM file reads (`openssl x509 -in`).  PBWEBSRV03 has outbound
+  443 blocked.  Scanner now reads all `ssl.pemfile` paths from the live
+  lighttpd config automatically — no hard-coded domain.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md`
+- `CHANGELOG.md` (this file)
+
+---
+
 ## [1.0.12] — 2026-05-30
 
 ### Fixed

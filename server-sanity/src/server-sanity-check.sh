@@ -289,71 +289,45 @@ check_no_lockfile() {
 }
 
 
-# check_cert_expiry <host> <port>
-# Connects to host:port, retrieves the TLS certificate, and checks expiry.
+# check_cert_expiry_file <pemfile> [label]
+# Reads a PEM certificate file from disk and checks expiry.
 # Thresholds: ≤7 days → _fail; ≤30 days → _warn; otherwise → _ok.
-# Requires openssl in PATH.  If the connection fails, emits _fail.
-#
-# Implementation note: openssl s_client keeps the TCP session open after the
-# handshake regardless of flags (-nocommands, echo Q, etc.) because the peer
-# does not send a close-notify promptly.  Running s_client in the background,
-# polling the output file until the certificate block lands, then killing the
-# process yields a result in ~100ms rather than blocking for the full timeout.
-check_cert_expiry() {
-  local host=$1 port=$2
+# Uses the first certificate block in the file (correct for fullchain.pem).
+check_cert_expiry_file() {
+  local pem=$1 label=${2:-$1}
 
-  if ! command -v openssl >/dev/null 2>&1; then
-    _warn "cert expiry: openssl not found — skipping ${host}:${port}"
+  if [[ ! -f $pem ]]; then
+    _fail "cert expiry: file not found: ${label}"
     return
   fi
 
-  local tmp sc_pid waited enddate
-  tmp=$(mktemp)
+  if ! command -v openssl >/dev/null 2>&1; then
+    _warn "cert expiry: openssl not found — skipping ${label}"
+    return
+  fi
 
-  # Run s_client in the background; capture all output to the temp file.
-  timeout 15 openssl s_client \
-    -connect "${host}:${port}" \
-    -servername "$host" \
-    2>/dev/null > "$tmp" &
-  sc_pid=$!
-
-  # Poll until the first certificate block is complete (max ~10s).
-  waited=0
-  while [[ $waited -lt 100 ]]; do
-    grep -q -- '-----END CERTIFICATE-----' "$tmp" 2>/dev/null && break
-    sleep 0.1
-    (( waited++ )) || true
-  done
-
-  # Kill s_client; we have what we need.
-  kill "$sc_pid" 2>/dev/null
-  wait "$sc_pid" 2>/dev/null || true  # wait returns 143 (SIGTERM) when we kill it; suppress
-
-  # Extract expiry from the first certificate block.
-  enddate=$(awk '/-----BEGIN CERTIFICATE-----/{p=1} p{print} /-----END CERTIFICATE-----/{exit}' "$tmp" \
-            | openssl x509 -noout -enddate 2>/dev/null \
-            | sed 's/notAfter=//')
-  rm -f "$tmp"
+  local enddate
+  enddate=$(openssl x509 -noout -enddate -in "$pem" 2>/dev/null | sed 's/notAfter=//')
 
   if [[ -z $enddate ]]; then
-    _fail "cert expiry: could not retrieve certificate for ${host}:${port}"
+    _fail "cert expiry: could not parse certificate: ${label}"
     return
   fi
 
   local expiry_epoch now_epoch days_left
   expiry_epoch=$(date -d "$enddate" +%s 2>/dev/null)
   if [[ -z $expiry_epoch ]]; then
-    _fail "cert expiry: could not parse expiry date for ${host}:${port} (${enddate})"
+    _fail "cert expiry: could not parse expiry date for ${label} (${enddate})"
     return
   fi
 
   now_epoch=$(date +%s)
   days_left=$(( (expiry_epoch - now_epoch) / 86400 ))
 
-  if   (( days_left <= 0 ));  then _fail "cert expiry: ${host}:${port} — EXPIRED  (${enddate})"
-  elif (( days_left <= 7 ));  then _fail "cert expiry: ${host}:${port} — ${days_left}d remaining  (${enddate})"
-  elif (( days_left <= 30 )); then _warn "cert expiry: ${host}:${port} — ${days_left}d remaining  (${enddate})"
-  else                              _ok   "cert expiry: ${host}:${port} — ${days_left}d remaining  (${enddate})"
+  if   (( days_left <= 0 ));  then _fail "cert expiry: ${label} — EXPIRED  (${enddate})"
+  elif (( days_left <= 7 ));  then _fail "cert expiry: ${label} — ${days_left}d remaining  (${enddate})"
+  elif (( days_left <= 30 )); then _warn "cert expiry: ${label} — ${days_left}d remaining  (${enddate})"
+  else                              _ok   "cert expiry: ${label} — ${days_left}d remaining  (${enddate})"
   fi
 }
 
@@ -659,11 +633,27 @@ fi
 
 check_dir "$LIGHTTPD_LOG" "/var/log/lighttpd"
 
-# lighttpd is a persistent daemon, not a oneshot — InactiveEnterTimestamp
-# is never set, so check_last_run would always warn "no run recorded yet".
-# Active state was already verified above; skip the last-run check here.
+# TLS certificate expiry — read all ssl.pemfile paths from the live config,
+# deduplicate, and check each one directly from disk.  No network required.
+if [[ -f $LIGHTTPD_CONF ]]; then
+  # Extract quoted pemfile paths from the live config only (not _archive/).
+  # sed: strip leading whitespace, match ssl.pemfile = "...", capture the path.
+  mapfile -t _pem_files < <(
+    sed -nE 's/^[[:space:]]*ssl\.pemfile[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' \
+      "$LIGHTTPD_CONF" \
+    | sort -u
+  )
 
-check_cert_expiry premiumbrandsholdings.com 443
+  if [[ ${#_pem_files[@]} -eq 0 ]]; then
+    _warn "cert expiry: no ssl.pemfile entries found in ${LIGHTTPD_CONF}"
+  else
+    for _pem in "${_pem_files[@]}"; do
+      # Use the domain directory name as the label (cleaner than full path).
+      _label=$(basename "$(dirname "$_pem")")
+      check_cert_expiry_file "$_pem" "$_label"
+    done
+  fi
+fi
 
 
 # =============================================================================
