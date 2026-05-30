@@ -4,6 +4,23 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.15] — 2026-05-30
+
+### Changed
+
+- `install.sh`: applied CLI formatting and visual style of `server-sanity-check.sh`
+  — TTY-detected colour palette (`RED`/`GRN`/`BLU`/`BOLD`/`RST`), `_ok`/`_fail`/`_head`
+  primitives with `✔`/`✘`/`═══` chrome, elapsed-time summary block, and
+  `PASS`/`FAIL` counters.  No functional or logic changes; `--only` and
+  `--help` behaviour unchanged.  ShellCheck clean (SC2155, SC2034 fixed).
+
+### Files changed
+
+- `install.sh`
+- `CHANGELOG.md` (this file)
+
+---
+
 ## [1.0.14] — 2026-05-30
 
 ### Fixed
