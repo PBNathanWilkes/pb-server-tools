@@ -4,6 +4,25 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.1.26] — 2026-05-30
+
+### Changed
+
+- `install.sh`: applied CLI formatting and visual style — TTY-detected colour
+  palette, `_ok`/`_fail`/`_head`/`_die` primitives with `✔`/`✘`/`══` chrome,
+  PASS/FAIL counters, elapsed-time summary block, runtime banner, inline root
+  guard, section banners on each step.  `verify_units` failures now route
+  through `_fail` so they appear in the counter.  No functional changes;
+  deploy logic and `deploy_overrides` KFC-R02 handling unchanged.
+  ShellCheck clean.
+
+### Files changed
+
+- `security-hardening/install.sh`
+- `security-hardening/CHANGELOG.md` (this file)
+
+---
+
 ## [2.1.25] — 2026-05-30
 
 ### Fixed

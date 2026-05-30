@@ -4,6 +4,29 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.16] — 2026-05-30
+
+### Changed
+
+- `check-for-updates` v4.2.21, `login-compliance` v0.9.1, `security-hardening`
+  v2.1.26: applied CLI formatting and visual style to all three sub-component
+  `install.sh` files — TTY-detected colour palette, `_ok`/`_fail`/`_head`/`_die`
+  primitives, PASS/FAIL counters, elapsed-time summary block, runtime banner,
+  inline root guard, section banners.  No functional or deploy-logic changes.
+  ShellCheck clean on all three.
+
+### Files changed
+
+- `check-for-updates/install.sh`
+- `check-for-updates/CHANGELOG.md`
+- `login-compliance/install.sh`
+- `login-compliance/CHANGELOG.md`
+- `security-hardening/install.sh`
+- `security-hardening/CHANGELOG.md`
+- `CHANGELOG.md` (this file)
+
+---
+
 ## [1.0.15] — 2026-05-30
 
 ### Changed
