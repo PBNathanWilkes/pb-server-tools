@@ -145,3 +145,6 @@ apparent correctness.
 breaking changes to deploy layout, state format, or systemd unit
 names. Current version for each component is authoritative in its own
 `CHANGELOG.md` — never infer from memory or from `README.md`.
+
+**Production notes**
+Codebase deployed to `/opt/server-tools/` If direct testing is required, always use full paths for QA.

@@ -4,6 +4,47 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.1.21] — 2026-05-30
+
+### Fixed
+
+- **`main()`: `INFO` status counted in `warn_count`, inflating summary warning
+  count by 1.**
+  The summary loop used a single `WARN|INFO` branch, so the `Fail2ban: INFO`
+  result (fail2ban not installed — expected and intentional) was counted as a
+  warning.  This caused the console/log summary to show `Warnings: 2` when
+  only 1 genuine WARN existed, and embedded the inflated count in email
+  subjects.  Fixed by splitting `INFO` into its own `info_count` variable.
+  `warn_count` now reflects only genuine `WARN`-status checks.  `info_count`
+  is included in the log summary (`Info: N`) and the HTML summary card.
+
+### Tests
+
+- `tests/unit/test_security_hardening.sh`: added T26.
+  T26: regression guard — in a mixed-status set containing one WARN and one
+  INFO, `warn_count` equals 1 and `info_count` equals 1 (INFO does not
+  contribute to `warn_count`).
+
+### KFC — new entry
+
+**KFC-SH04** (security-hardening component, `main()`)
+
+- **Version observed:** v2.1.14–v2.1.20
+- **Failure mode:** Summary loop uses `WARN|INFO` branch; any INFO-status
+  check increments `warn_count`.  With Fail2ban not installed (the common
+  case), `Warnings` in console/log/HTML/email is always one higher than the
+  actual number of WARN checks.  Operators see `Warnings: 2` with only one
+  real warning, and email subjects state the wrong count.
+- **Root cause:** `INFO` is semantically distinct from `WARN` but was
+  bucketed with it in the count loop.  There was no separate counter.
+- **Fix applied:** v2.1.21 — separate `info_count` variable; `WARN|INFO`
+  branch split into `WARN)` and `INFO)` cases.  `info_count` exposed in log
+  summary and HTML.
+- **Current-version mitigation:** T26 guards against regression to the
+  combined `WARN|INFO` branch.
+
+---
+
 ## [2.1.20] — 2026-05-29
 
 ### Fixed

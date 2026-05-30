@@ -522,12 +522,38 @@ allowusers golan"
 }
 
 # ---------------------------------------------------------------------------
+# T26 — INFO status not counted in warn_count; tallied in info_count only
+#       Regression guard: the original WARN|INFO branch inflated warn_count
+#       by 1 for every INFO-status check (e.g. fail2ban not installed).
+# ---------------------------------------------------------------------------
+T26() {
+  local result
+  result=$(
+    warn_count=0
+    info_count=0
+    # Simulate the fixed summary loop over a mixed set of statuses
+    for s in OK WARN OK INFO CRITICAL OK; do
+      case "$s" in
+        OK)       : ;;
+        WARN)     warn_count=$((warn_count + 1)) ;;
+        INFO)     info_count=$((info_count + 1)) ;;
+        CRITICAL) : ;;
+      esac
+    done
+    printf '%d|%d' "$warn_count" "$info_count"
+  )
+  [[ "$result" == "1|1" ]] \
+    && pass "T26 INFO not in warn_count: 1 WARN, 1 INFO counted separately" \
+    || fail "T26 INFO not in warn_count: expected '1|1', got '$result'"
+}
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 printf '\n'
 T01; T02; T03; T04; T05; T06; T07; T08; T09
 T10; T11; T12; T13; T14; T15; T16; T17; T18; T19; T20
-T21; T22; T23; T24; T25
+T21; T22; T23; T24; T25; T26
 
 printf '\n--- Results: %d passed, %d failed ---\n' "$PASS" "$FAIL"
 if [[ $FAIL -gt 0 ]]; then

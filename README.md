@@ -61,7 +61,7 @@ Emails an HTML report with per-check status badges.
 - **Script:** `/usr/local/libexec/pb-maintenance/security-hardening-check.sh`
 - **Timers:** `pb-security-hardening-check.timer` (weekly), `pb-security-hardening-check-monthly.timer`
 - **Logs:** `/backup/security-logs/`
-- **Version:** v2.1.14
+- **Version:** v2.1.21
 
 ### login-compliance
 

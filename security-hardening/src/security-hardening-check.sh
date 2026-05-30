@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # security-hardening-check.sh — Check security hardening status and email a report (HTML)
 # Executed via systemd timers (cron no longer used). Requires: mailx (s-nail/bsd-mailx), msmtp (or other MTA)
-# v2.1.19
+# v2.1.21
 #
 # DISTRIBUTION COMPATIBILITY:
 # Primary: Ubuntu Server (all versions with systemd)
@@ -10,6 +10,10 @@
 # Note: Raspberry Pi OS-specific considerations are noted throughout the script
 #
 # VERSION HISTORY (for maintainers):
+# v2.1.21 - Bugfix: INFO status (fail2ban not installed) was counted in warn_count in
+#            the summary loop, inflating 'Warnings' by 1 and embedding a higher count
+#            in the email subject / log message.  INFO now tallied separately in
+#            info_count; warn_count reflects only genuine WARN-status checks.
 # v2.1.20 - Bugfix: AllowUsers/AllowGroups check used _ssh_val (first-match awk) to
 #            retrieve allow-list entries. When users are specified across separate
 #            drop-in files, sshd -T emits one "allowusers <user>" line per drop-in;
@@ -82,7 +86,7 @@ set -Eeuo pipefail
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
-readonly VERSION="2.1.20"
+readonly VERSION="2.1.21"
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
 readonly PATH="/usr/sbin:/usr/bin:/sbin:/bin"
@@ -1607,6 +1611,7 @@ html_summary_section() {
     local ok_count="$2"
     local warn_count="$3"
     local critical_count="$4"
+    local info_count="${5:-0}"
     
     cat >> "$EMAIL_HTML_FILE" <<HTML
 <h2>Security Check Summary</h2>
@@ -1626,6 +1631,10 @@ html_summary_section() {
   <div class="summary-card" style="border-color: #ef4444;">
     <div class="summary-label">Critical</div>
     <div class="summary-number" style="color: #ef4444;">${critical_count}</div>
+  </div>
+  <div class="summary-card" style="border-color: #3b82f6;">
+    <div class="summary-label">Info</div>
+    <div class="summary-number" style="color: #3b82f6;">${info_count}</div>
   </div>
 </div>
 HTML
@@ -1857,6 +1866,7 @@ HTML
     local total_checks=0
     local ok_count=0
     local warn_count=0
+    local info_count=0
     local critical_count=0
     local total_issues=0
     
@@ -2129,8 +2139,11 @@ HTML
             OK)
                 ok_count=$((ok_count + 1))
                 ;;
-            WARN|INFO)
+            WARN)
                 warn_count=$((warn_count + 1))
+                ;;
+            INFO)
+                info_count=$((info_count + 1))
                 ;;
             CRITICAL)
                 critical_count=$((critical_count + 1))
@@ -2139,7 +2152,7 @@ HTML
     done
 
     # Generate HTML summary
-    html_summary_section "$total_checks" "$ok_count" "$warn_count" "$critical_count"
+    html_summary_section "$total_checks" "$ok_count" "$warn_count" "$critical_count" "$info_count"
 
     # Generate HTML check sections
     for check in "ICMP Rate Limiting" "Firewall" "SSH Security" "Automatic Updates" \
@@ -2161,6 +2174,7 @@ HTML
     log "  Total checks: $total_checks"
     log "  Passed (OK): $ok_count"
     log "  Warnings: $warn_count"
+    log "  Info: $info_count"
     log "  Critical: $critical_count"
     log "  Total issues found: $total_issues"
     log "=========================================="
