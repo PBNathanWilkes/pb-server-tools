@@ -35,9 +35,9 @@ fi
 _pass=0; _fail=0; _warn=0
 
 # ── Primitives ───────────────────────────────────────────────────────────────
-_ok()   { printf "  ${GRN}✔${RST}  %s\n" "$*";           (( _pass++ )); }
-_fail() { printf "  ${RED}✘${RST}  %s\n" "$*";           (( _fail++ )); }
-_warn() { printf "  ${YLW}⚠${RST}  %s\n" "$*";           (( _warn++ )); }
+_ok()   { printf "  ${GRN}✔${RST}  %s\n" "$*";           (( ++_pass )); }
+_fail() { printf "  ${RED}✘${RST}  %s\n" "$*";           (( ++_fail )); }
+_warn() { printf "  ${YLW}⚠${RST}  %s\n" "$*";           (( ++_warn )); }
 _head() { printf "\n${BOLD}${BLU}══ %s${RST}\n" "$*"; }
 
 # ── Guards ───────────────────────────────────────────────────────────────────
@@ -184,13 +184,12 @@ check_timer() {
   state=$(systemctl is-active "$unit" 2>/dev/null || echo "inactive")
 
   if [[ $state == "active" ]]; then
-    # NextElapseUSecRealtime is µs since epoch; convert to human-readable.
-    local next_us
-    next_us=$(systemctl show "$unit" -p NextElapseUSecRealtime --value 2>/dev/null || echo "0")
-    local next_str="unknown"
-    if [[ $next_us =~ ^[0-9]+$ && $next_us -gt 0 ]]; then
-      next_str=$(date -d "@$(( next_us / 1000000 ))" '+%Y-%m-%d %H:%M %Z' 2>/dev/null || echo "$next_us µs")
-    fi
+    # list-timers gives human-readable NEXT column; avoids µs→epoch arithmetic
+    # overflow in bash signed 64-bit integers with large NextElapseUSecRealtime values.
+    local next_str
+    next_str=$(systemctl list-timers "$unit" --no-pager --no-legend 2>/dev/null \
+               | awk 'NR==1 {print $2, $3, $4}')
+    [[ -z $next_str ]] && next_str="unknown"
     _ok "timer:   $unit  (next: $next_str)"
   else
     _fail "timer not active: $unit  (state: $state)"
