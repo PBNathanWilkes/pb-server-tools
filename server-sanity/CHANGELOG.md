@@ -4,6 +4,28 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.2.3] — 2026-05-30
+
+### Fixed
+
+- **`check_cert_expiry`:** the `echo Q` and `-nocommands` approaches both
+  failed because `premiumbrandsholdings.com` does not send a TLS close-notify
+  promptly after the handshake, so `s_client` kept the session open and blocked
+  its downstream pipe consumer for the full `timeout` duration (10s).  The
+  real fix runs `s_client` in the background writing to a temp file, polls the
+  file until the `-----END CERTIFICATE-----` line appears (typically one
+  iteration / ~100ms), kills `s_client`, then extracts the expiry from the
+  buffered output.  `timeout 15` on the background process is a last-resort
+  guard against a completely unresponsive host.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md`
+- `CHANGELOG.md` (repo)
+
+---
+
 ## [1.2.2] — 2026-05-30
 
 ### Fixed

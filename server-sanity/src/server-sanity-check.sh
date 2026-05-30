@@ -293,6 +293,12 @@ check_no_lockfile() {
 # Connects to host:port, retrieves the TLS certificate, and checks expiry.
 # Thresholds: ≤7 days → _fail; ≤30 days → _warn; otherwise → _ok.
 # Requires openssl in PATH.  If the connection fails, emits _fail.
+#
+# Implementation note: openssl s_client keeps the TCP session open after the
+# handshake regardless of flags (-nocommands, echo Q, etc.) because the peer
+# does not send a close-notify promptly.  Running s_client in the background,
+# polling the output file until the certificate block lands, then killing the
+# process yields a result in ~100ms rather than blocking for the full timeout.
 check_cert_expiry() {
   local host=$1 port=$2
 
@@ -301,17 +307,33 @@ check_cert_expiry() {
     return
   fi
 
-  local enddate
-  # -nocommands exits after the handshake without waiting for stdin.
-  # timeout 10 guards against a stalled TCP connection.
-  enddate=$(timeout 10 \
-              openssl s_client \
-                -connect "${host}:${port}" \
-                -servername "$host" \
-                -nocommands \
-                2>/dev/null \
+  local tmp sc_pid waited enddate
+  tmp=$(mktemp)
+
+  # Run s_client in the background; capture all output to the temp file.
+  timeout 15 openssl s_client \
+    -connect "${host}:${port}" \
+    -servername "$host" \
+    2>/dev/null > "$tmp" &
+  sc_pid=$!
+
+  # Poll until the first certificate block is complete (max ~8s).
+  waited=0
+  while [[ $waited -lt 80 ]]; do
+    grep -q -- '-----END CERTIFICATE-----' "$tmp" 2>/dev/null && break
+    sleep 0.1
+    (( waited++ )) || true
+  done
+
+  # Kill s_client; we have what we need.
+  kill "$sc_pid" 2>/dev/null
+  wait "$sc_pid" 2>/dev/null
+
+  # Extract expiry from the first certificate block.
+  enddate=$(awk '/-----BEGIN CERTIFICATE-----/{p=1} p{print} /-----END CERTIFICATE-----/{exit}' "$tmp" \
             | openssl x509 -noout -enddate 2>/dev/null \
             | sed 's/notAfter=//')
+  rm -f "$tmp"
 
   if [[ -z $enddate ]]; then
     _fail "cert expiry: could not retrieve certificate for ${host}:${port}"

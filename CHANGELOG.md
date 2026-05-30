@@ -4,6 +4,22 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.11] — 2026-05-30
+
+### Fixed
+
+- `server-sanity` v1.2.3: `check_cert_expiry` still blocked for the full
+  timeout duration.  Fixed by running `s_client` in the background, polling
+  for the certificate block, then killing it — resolves in ~100ms.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md`
+- `CHANGELOG.md` (this file)
+
+---
+
 ## [1.0.10] — 2026-05-30
 
 ### Fixed
