@@ -25,7 +25,7 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
   INFO, `warn_count` equals 1 and `info_count` equals 1 (INFO does not
   contribute to `warn_count`).
 
-### KFC — new entry
+### KFC — new entries
 
 **KFC-SH04** (security-hardening component, `main()`)
 
@@ -42,6 +42,38 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
   summary and HTML.
 - **Current-version mitigation:** T26 guards against regression to the
   combined `WARN|INFO` branch.
+
+**KFC-SH05** (security-hardening component, host configuration / `check_ssh_security`)
+
+- **Version observed:** OpenSSH 9.6p1 / Ubuntu 24.04 (pblinuxutility,
+  observed 2026-05-30)
+- **Failure mode:** `PasswordAuthentication no` in `99-hardening.conf` is
+  overridden by `PasswordAuthentication yes` in `50-cloud-init.conf` despite
+  `99` sorting after `50`. `sshd -T` correctly reports `passwordauthentication
+  yes` (the daemon genuinely accepts password logins). All config files appear
+  correct on inspection; `sshd -t` passes; `systemctl reload ssh` has no
+  effect. The checker reports WARN accurately — the WARN is genuine.
+- **Root cause:** OpenSSH 9.6p1 on Ubuntu 24.04 processes `Include` glob
+  matches in **reverse** lexicographic order on this host. `99-hardening.conf`
+  is processed first; `50-cloud-init.conf` is processed last and wins.
+  The mechanism is not fully characterised (may be filesystem readdir order,
+  a glob implementation detail, or an OpenSSH version-specific behaviour).
+  Confirmed by: removing `50-cloud-init.conf` caused `sshd -T` to flip to
+  `passwordauthentication no`.
+- **Fix applied:** Deleted `/etc/ssh/sshd_config.d/50-cloud-init.conf`.
+  Cloud-init is permanently disabled on this host (`cloud-init status:
+  disabled`; `cloud-init.service` not found) and will not regenerate the file.
+- **Current-version mitigation:** No checker code change — the checker
+  correctly reported WARN. Operators encountering this condition on other hosts
+  should verify `cloud-init status` before deleting the file. If cloud-init is
+  active, disable the SSH module instead:
+  ```
+  sudo cloud-init clean --configs network   # or
+  echo 'network: {config: disabled}' | sudo tee /etc/cloud/cloud.cfg.d/99-disable-network.cfg
+  ```
+  A future improvement could detect the conflict by comparing each drop-in
+  file's `PasswordAuthentication` directive against `sshd -T` output and
+  warning when a lower-numbered drop-in overrides a higher-numbered one.
 
 ---
 

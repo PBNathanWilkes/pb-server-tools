@@ -148,3 +148,5 @@ names. Current version for each component is authoritative in its own
 
 **Production notes**
 Codebase deployed to `/opt/server-tools/` If direct testing is required, always use full paths for QA.
+
+Code is installed by `sudo /opt/server-tools/install.sh`. not by manual cp or rsync. 
