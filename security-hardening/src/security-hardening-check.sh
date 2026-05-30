@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # security-hardening-check.sh — Check security hardening status and email a report (HTML)
 # Executed via systemd timers (cron no longer used). Requires: mailx (s-nail/bsd-mailx), msmtp (or other MTA)
-# v2.1.18
+# v2.1.19
 #
 # DISTRIBUTION COMPATIBILITY:
 # Primary: Ubuntu Server (all versions with systemd)
@@ -10,6 +10,13 @@
 # Note: Raspberry Pi OS-specific considerations are noted throughout the script
 #
 # VERSION HISTORY (for maintainers):
+# v2.1.19 - Bugfix: sshd -T probe used '| head -1 >/dev/null' to test if sshd -T succeeded.
+#            sshd -T emits ~150 lines; head -1 reads one line and exits, sending SIGPIPE
+#            (exit 141) to sshd.  Under set -o pipefail the pipe exits 141 (non-zero),
+#            so the if-condition was always false, effective_config was never populated,
+#            and the fallback to sshd_config file-grep always fired — silently missing all
+#            drop-in directives.  Fixed by capturing output directly in a single $()
+#            assignment with || true, and testing emptiness afterward.
 # v2.1.18 - Bugfix: sshd -T invocation now includes -C context flags
 #            (user=root,host=localhost,addr=127.0.0.1,laddr=127.0.0.1,lport=22).
 #            OpenSSH >=6.5 requires a synthetic connection context when any Match
@@ -70,7 +77,7 @@ set -Eeuo pipefail
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
-readonly VERSION="2.1.18"
+readonly VERSION="2.1.19"
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
 readonly PATH="/usr/sbin:/usr/bin:/sbin:/bin"
@@ -319,11 +326,17 @@ check_ssh_security() {
     # file-grep and missing all drop-in overrides.  The values are synthetic
     # (localhost loopback) — they satisfy the parser without implying a real
     # connection.
+    #
+    # Capture in a single invocation; do NOT probe with '| head -1'.
+    # sshd -T produces ~150 lines; head -1 closes early and sends SIGPIPE to
+    # sshd (exit 141).  Under set -o pipefail the pipe exits non-zero,
+    # making the probe false and leaving effective_config empty even though
+    # sshd -T succeeds perfectly.  Instead capture everything in one $()
+    # appended with || true so a genuine sshd -T failure (pre-install
+    # environment, corrupt binary) leaves effective_config empty without
+    # triggering the ERR trap.
     local effective_config=""
-    local _sshd_T_cmd="sshd -T -C user=root,host=localhost,addr=127.0.0.1,laddr=127.0.0.1,lport=22"
-    if $_sshd_T_cmd 2>/dev/null | head -1 >/dev/null; then
-        effective_config="$($_sshd_T_cmd 2>/dev/null)"
-    fi
+    effective_config="$(sshd -T -C user=root,host=localhost,addr=127.0.0.1,laddr=127.0.0.1,lport=22 2>/dev/null)" || true
 
     if [[ -z "$effective_config" ]]; then
         details+="  WARN: sshd -T failed; falling back to sshd_config file grep.@@N@@"

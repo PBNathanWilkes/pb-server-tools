@@ -4,7 +4,61 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [2.1.18] — 2026-05-29
+## [2.1.19] — 2026-05-29
+
+### Fixed
+
+- **`check_ssh_security()`: `sshd -T` probe replaced — `| head -1` caused SIGPIPE
+  failure under `pipefail`.**
+  The previous probe was:
+  ```
+  if sshd -T -C ... | head -1 >/dev/null; then
+      effective_config="$(sshd -T -C ... )"
+  fi
+  ```
+  `sshd -T` emits ~150 lines. `head -1` reads one line and exits, sending
+  SIGPIPE (exit 141) to `sshd`. Under `set -o pipefail` the pipe exits 141
+  (non-zero), making the `if` condition false on every run. `effective_config`
+  was never populated; the script always fell back to grepping
+  `/etc/ssh/sshd_config` directly, silently missing every directive set in
+  drop-ins under `/etc/ssh/sshd_config.d/`.
+
+  Fixed by capturing output in a single assignment with `|| true`:
+  ```
+  effective_config="$(sshd -T -C ... 2>/dev/null)" || true
+  ```
+  Emptiness of `effective_config` (genuine `sshd -T` failure) is tested
+  afterward. This also eliminates the redundant second `sshd -T` invocation
+  the old probe required.
+
+### Tests
+
+- `tests/unit/test_security_hardening.sh`: added T24.
+  T24: regression guard — source must not contain `| head -1` on the same
+  line as the `sshd -T` capture; that pattern causes SIGPIPE under pipefail.
+
+### KFC — new entry
+
+**KFC-SH02** (security-hardening component, `check_ssh_security`)
+
+- **Version observed:** v2.1.16–v2.1.18
+- **Failure mode:** `sshd -T` probe uses `| head -1 >/dev/null` to test
+  success. `sshd -T` produces ~150 lines; `head -1` exits after one line,
+  sending SIGPIPE (exit 141) to `sshd`. Under `set -o pipefail` the pipe
+  exits 141. The `if` is false; `effective_config` is never set; the fallback
+  to `sshd_config` file-grep fires on every run. All drop-in directives
+  (e.g. `MaxAuthTries`, `AllowUsers`) are invisible to the checker.
+- **Root cause:** Probing a multi-line-output command with `| head -1` under
+  `pipefail` is structurally unsound. The SIGPIPE from `head` propagates as a
+  non-zero pipe exit.
+- **Fix applied:** v2.1.19 — single `$(...) || true` assignment; emptiness
+  tested afterward.
+- **Current-version mitigation:** T24 guards against regression to the
+  `| head -1` probe pattern.
+
+---
+
+
 
 ### Fixed
 

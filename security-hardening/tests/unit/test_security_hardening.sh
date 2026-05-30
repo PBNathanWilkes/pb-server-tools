@@ -482,12 +482,28 @@ T23() {
 }
 
 # ---------------------------------------------------------------------------
+# T24 — sshd -T probe: no '| head -1' pipe in the capture path
+#       Regression guard: '| head -1' sends SIGPIPE to sshd -T (exit 141);
+#       under set -o pipefail the probe fails and effective_config is never
+#       populated, causing silent fallback to file-grep on every run.
+# ---------------------------------------------------------------------------
+T24() {
+  # The fixed code captures via: effective_config="$(sshd -T ... 2>/dev/null)" || true
+  # Verify: no 'head -1' appears on the same line as the sshd -T capture.
+  local bad_lines
+  bad_lines=$(grep -cE "^[^#]*sshd -T.*head -1|^[^#]*head -1.*sshd -T" "$SRC" || true)
+  [[ "$bad_lines" -eq 0 ]] \
+    && pass "T24 sshd -T probe: no SIGPIPE-inducing '| head -1' in capture path" \
+    || fail "T24 sshd -T probe: found '| head -1' adjacent to sshd -T — SIGPIPE regression"
+}
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 printf '\n'
 T01; T02; T03; T04; T05; T06; T07; T08; T09
 T10; T11; T12; T13; T14; T15; T16; T17; T18; T19; T20
-T21; T22; T23
+T21; T22; T23; T24
 
 printf '\n--- Results: %d passed, %d failed ---\n' "$PASS" "$FAIL"
 if [[ $FAIL -gt 0 ]]; then
