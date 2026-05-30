@@ -302,11 +302,13 @@ check_cert_expiry() {
   fi
 
   local enddate
-  # echo Q sends a TLS close-notify so s_client exits immediately after
-  # the handshake rather than waiting for stdin EOF (which some servers
-  # do not honour, causing an indefinite hang).
-  enddate=$(echo Q \
-            | openssl s_client -connect "${host}:${port}" -servername "$host" \
+  # -nocommands exits after the handshake without waiting for stdin.
+  # timeout 10 guards against a stalled TCP connection.
+  enddate=$(timeout 10 \
+              openssl s_client \
+                -connect "${host}:${port}" \
+                -servername "$host" \
+                -nocommands \
                 2>/dev/null \
             | openssl x509 -noout -enddate 2>/dev/null \
             | sed 's/notAfter=//')

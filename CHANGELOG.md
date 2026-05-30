@@ -4,6 +4,21 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.10] — 2026-05-30
+
+### Fixed
+
+- `server-sanity` v1.2.2: `check_cert_expiry` still hung with `echo Q` on
+  `premiumbrandsholdings.com`.  Fixed with `-nocommands` + `timeout 10`.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md`
+- `CHANGELOG.md` (this file)
+
+---
+
 ## [1.0.9] — 2026-05-30
 
 ### Fixed

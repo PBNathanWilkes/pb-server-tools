@@ -4,6 +4,24 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.2.2] — 2026-05-30
+
+### Fixed
+
+- **`check_cert_expiry`:** `echo Q |` did not prevent the hang on
+  `premiumbrandsholdings.com` — the server does not respond to the close-notify
+  promptly enough.  Replaced with `openssl s_client -nocommands` (exits after
+  the handshake without waiting for stdin) plus `timeout 10` as a
+  belt-and-suspenders guard against stalled TCP connections.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md`
+- `CHANGELOG.md` (repo)
+
+---
+
 ## [1.2.1] — 2026-05-30
 
 ### Fixed
