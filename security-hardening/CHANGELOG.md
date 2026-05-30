@@ -4,6 +4,25 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.1.24] — 2026-05-30
+
+### Fixed
+
+- `overrides/pblinuxutility/pb-security-hardening-check*.service.d/no-namespace.conf`:
+  added `ReadWritePaths=` reset. This path-binding directive requires a mount
+  namespace (`CLONE_NEWNS`) and was the remaining cause of exit 226 after the
+  previous five directives were cleared.
+
+### Files changed
+
+- `overrides/pblinuxutility/pb-security-hardening-check.service.d/no-namespace.conf`
+- `overrides/pblinuxutility/pb-security-hardening-check-monthly.service.d/no-namespace.conf`
+- `overrides/pblinuxutility/README.md`
+- `DEV-GUIDE.md` (KFC-R02 updated)
+- `CHANGELOG.md` (this file)
+
+---
+
 ## [2.1.23] — 2026-05-30
 
 ### Fixed

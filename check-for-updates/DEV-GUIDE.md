@@ -1,7 +1,7 @@
 # DEV-GUIDE.md — check-for-updates Development Guide
 
 **Project:** `check-for-updates`
-**Current version:** v4.2.18
+**Current version:** v4.2.19
 **Platform:** Ubuntu 24.04 Noble
 
 ---

@@ -27,6 +27,8 @@ require mount namespace support are:
 | `PrivateTmp=true` | `CLONE_NEWNS` (private `/tmp` via tmpfs) |
 | `ProtectKernelModules=true` | `CLONE_NEWNS` + `CAP_SYS_MODULE` restriction |
 | `ProtectKernelTunables=true` | `CLONE_NEWNS` (read-only bind of `/proc/sys`, `/sys`) |
+| `ReadOnlyPaths=` | `CLONE_NEWNS` (bind-mount of named paths read-only) |
+| `ReadWritePaths=` | `CLONE_NEWNS` (bind-mount of named paths read-write) |
 
 PBWEBSRV03 honours the same directives without issue, confirming this is
 a host-capability difference, not a unit-file defect.

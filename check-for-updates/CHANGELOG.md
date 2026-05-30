@@ -4,6 +4,26 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [4.2.19] — 2026-05-30
+
+### Fixed
+
+- `overrides/pblinuxutility/pb-check-for-updates*.service.d/no-namespace.conf`:
+  added `ReadOnlyPaths=` and `ReadWritePaths=` resets. These path-binding
+  directives require a mount namespace (`CLONE_NEWNS`) and were the remaining
+  cause of exit 226 after `ProtectSystem=`, `ProtectHome=`, `ProtectKernelModules=`,
+  and `ProtectKernelTunables=` were already cleared.
+
+### Files changed
+
+- `overrides/pblinuxutility/pb-check-for-updates.service.d/no-namespace.conf`
+- `overrides/pblinuxutility/pb-check-for-updates-monthly.service.d/no-namespace.conf`
+- `overrides/pblinuxutility/README.md`
+- `DEV-GUIDE.md` (KFC-R02 updated)
+- `CHANGELOG.md` (this file)
+
+---
+
 ## [4.2.18] — 2026-05-30
 
 ### Fixed
