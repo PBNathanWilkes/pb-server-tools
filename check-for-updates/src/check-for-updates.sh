@@ -8,6 +8,11 @@
 #
 # v4.2.12
 ## VERSION HISTORY (for maintainers):
+# v4.2.16 — Fix: _check_lts() in pb-apt-evaluator.py. Removes defunct
+#            check-new-release/check-new-release-gtk path lookup (scripts no
+#            longer exist on Ubuntu 24.04+). Drops -f DistUpgradeViewNonInteractive
+#            which suppressed all output on 24.04+, causing lts_upgrade_available
+#            to always be false. Adds LANG/LC_ALL=C for locale-independent output.
 # v4.2.12 — Fix: Eliminate TOCTOU race in APT lock handling. _wait_for_apt_lock()
 #            replaced by _acquire_apt_locks() / _release_apt_locks(). Locks are
 #            held open (pass_fds) across the apt-get update subprocess call so
@@ -48,7 +53,7 @@ set -Eeuo pipefail
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-readonly VERSION="4.2.0"
+readonly VERSION="4.2.16"
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
 

@@ -713,5 +713,126 @@ class TestNoInRunConfirmationSleep(unittest.TestCase):
                              "evaluate() must not sleep >= 60 seconds (no in-run confirmation pass)")
 
 
+class TestCheckLts(unittest.TestCase):
+    """
+    Tests for _check_lts() — Ubuntu LTS upgrade detection.
+
+    Root cause documented in v4.2.16: check-new-release scripts no longer
+    exist on Ubuntu 24.04+, and -f DistUpgradeViewNonInteractive silently
+    suppressed all output, causing lts_upgrade_available to always be false.
+    """
+
+    def _run(self, stdout="", stderr="", returncode=0, side_effect=None):
+        """Helper: patch subprocess.run and call _check_lts()."""
+        with patch("subprocess.run") as mock_run:
+            if side_effect is not None:
+                mock_run.side_effect = side_effect
+            else:
+                mock_run.return_value = MagicMock(
+                    stdout=stdout, stderr=stderr, returncode=returncode
+                )
+            return _mod._check_lts(), mock_run
+
+    # --- Detection ---
+
+    def test_detects_lts_from_stdout(self):
+        """Standard 24.04+ output: version extracted from stdout."""
+        (available, version), _ = self._run(
+            stdout="New release '26.04 LTS' available.\nRun 'do-release-upgrade' to upgrade.\n"
+        )
+        self.assertTrue(available)
+        self.assertEqual(version, "26.04")
+
+    def test_detects_lts_from_stderr(self):
+        """Version string present only in stderr is still detected."""
+        (available, version), _ = self._run(
+            stdout="", stderr="New release '26.04 LTS' available.\n"
+        )
+        self.assertTrue(available)
+        self.assertEqual(version, "26.04")
+
+    def test_no_lts_available(self):
+        """Exit 1, no output → (False, None)."""
+        (available, version), _ = self._run(stdout="", stderr="", returncode=1)
+        self.assertFalse(available)
+        self.assertIsNone(version)
+
+    def test_exception_returns_false_none(self):
+        """subprocess raises (e.g. command not found) → safe (False, None)."""
+        (available, version), _ = self._run(side_effect=FileNotFoundError("do-release-upgrade not found"))
+        self.assertFalse(available)
+        self.assertIsNone(version)
+
+    def test_timeout_returns_false_none(self):
+        """Timeout returns (False, None) gracefully."""
+        import subprocess as _sp
+        (available, version), _ = self._run(side_effect=_sp.TimeoutExpired(["do-release-upgrade"], 45))
+        self.assertFalse(available)
+        self.assertIsNone(version)
+
+    # --- Command construction ---
+
+    def test_does_not_use_f_flag(self):
+        """-f DistUpgradeViewNonInteractive must NOT be passed (suppresses output on 24.04+)."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="", stderr="", returncode=1)
+            _mod._check_lts()
+        cmd = mock_run.call_args[0][0]
+        self.assertNotIn("-f", cmd,
+            "-f flag suppresses output on Ubuntu 24.04+ and must not be used")
+        self.assertNotIn("DistUpgradeViewNonInteractive", cmd)
+
+    def test_uses_check_only_flag(self):
+        """-c (check-only) must be passed so no upgrade is attempted."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="", stderr="", returncode=1)
+            _mod._check_lts()
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("-c", cmd)
+
+    def test_does_not_call_check_new_release(self):
+        """check-new-release scripts no longer exist on Ubuntu 24.04+ and must not be called."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="", stderr="", returncode=1)
+            _mod._check_lts()
+        cmd = mock_run.call_args[0][0]
+        for arg in cmd:
+            self.assertNotIn("check-new-release", str(arg),
+                "check-new-release scripts do not exist on Ubuntu 24.04+")
+
+    def test_c_locale_set(self):
+        """LANG and LC_ALL must be C to prevent localised output breaking the regex."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="", stderr="", returncode=1)
+            _mod._check_lts()
+        env = mock_run.call_args[1].get("env") or mock_run.call_args.kwargs.get("env", {})
+        self.assertEqual(env.get("LANG"), "C",
+            "LANG must be C to prevent localised output")
+        self.assertEqual(env.get("LC_ALL"), "C",
+            "LC_ALL must be C to prevent localised output")
+
+    def test_only_one_subprocess_call(self):
+        """Exactly one subprocess call is made (no fallback chain)."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="", stderr="", returncode=1)
+            _mod._check_lts()
+        self.assertEqual(mock_run.call_count, 1)
+
+    def test_version_number_extracted_correctly(self):
+        """Version string is the dotted pair only, not the full release name."""
+        (available, version), _ = self._run(
+            stdout="New release '28.04 LTS' available.\n"
+        )
+        self.assertEqual(version, "28.04")
+
+    def test_quoted_version_with_no_quotes(self):
+        """Regex handles output with and without quotes around the version."""
+        (available, version), _ = self._run(
+            stdout="New release 26.04 LTS available.\n"
+        )
+        self.assertTrue(available)
+        self.assertEqual(version, "26.04")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

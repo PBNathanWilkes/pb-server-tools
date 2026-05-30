@@ -4,7 +4,41 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [4.2.15] — 2026-05-15
+## [4.2.16] — 2026-05-29
+
+### Fixed
+
+- `pb-apt-evaluator.py`: `_check_lts()` never detected an available Ubuntu LTS
+  upgrade on Ubuntu 24.04+ hosts. Two compounding causes:
+  1. The function tried `/usr/lib/ubuntu-release-upgrader/check-new-release` and
+     `check-new-release-gtk` first; these scripts do not exist on Ubuntu 24.04+
+     (removed when ubuntu-release-upgrader was refactored). Execution always fell
+     through to the `do-release-upgrade` fallback.
+  2. The fallback invoked `do-release-upgrade -c -f DistUpgradeViewNonInteractive`.
+     On Ubuntu 24.04+, `-f DistUpgradeViewNonInteractive` suppresses all
+     stdout/stderr output (the command exits 1 silently). Both regex patterns
+     matched against an empty string and both returned `None`, so
+     `lts_upgrade_available` was always `false` in the state file.
+
+  Fixed by replacing the entire function with a single `do-release-upgrade -c`
+  call (no `-f` flag). Added `LANG=C LC_ALL=C` to prevent localised output from
+  breaking the `New release '(\d+\.\d+)'` regex. Removed the defunct
+  `check-new-release` lookup entirely.
+
+- `check-for-updates.sh`: `VERSION` constant was `4.2.0` (never updated from
+  the initial v4.2 shim release). Bumped to `4.2.16` to match the evaluator.
+
+### Tests
+
+- `tests/unit/test_pb_apt_evaluator.py`: added `TestCheckLts` (11 tests).
+  Covers: stdout detection, stderr detection, no-LTS-available, exception
+  safety, timeout safety, `-f` flag absent (regression guard), `-c` flag
+  present, `check-new-release` not called (regression guard), C locale set,
+  single subprocess call, version extraction, unquoted version format.
+
+---
+
+
 
 ### Fixed
 

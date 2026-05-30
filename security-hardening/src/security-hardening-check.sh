@@ -10,6 +10,25 @@
 # Note: Raspberry Pi OS-specific considerations are noted throughout the script
 #
 # VERSION HISTORY (for maintainers):
+# v2.1.16 - Improvement: SSH check uses `sshd -T` (effective config) instead of grepping
+#            sshd_config; correctly handles Include directives and drop-ins in
+#            /etc/ssh/sshd_config.d/. Fixes false-OK when PasswordAuthentication is
+#            overridden in a drop-in. Fixes wrong default-assumption for
+#            PasswordAuthentication (default is now `no` on Ubuntu 22.04+/OpenSSH 8.8+,
+#            not `yes`). Added SSH checks: MaxAuthTries, AllowUsers/AllowGroups,
+#            LoginGraceTime, ClientAliveInterval.
+#            Improvement: check_kernel_security() adds 7 parameters: randomize_va_space,
+#            conf.default.accept_redirects, ipv6 accept_redirects, rp_filter,
+#            protected_hardlinks, protected_symlinks, yama.ptrace_scope, log_martians.
+#            Bugfix: check_file_permissions() octal comparison replaced with bitwise
+#            AND against complement mask; fixes false-negative for modes like 640 vs 600.
+#            Bugfix: check_sudo_configuration() NOPASSWD scan now covers /etc/sudoers.d/*
+#            (was limited to /etc/sudoers only).
+#            Added: check_auditd() — detects auditd installed, enabled, and running.
+#            Added: check_shadow_hash_algorithm() — detects MD5/DES password hashes in
+#            /etc/shadow (CRITICAL) and verifies yescrypt/SHA-512 are in use.
+#            Added: check_unattended_upgrades_scope() — verifies security origin is in
+#            Unattended-Upgrade::Allowed-Origins in 50unattended-upgrades.
 # v2.1.15 - Bugfix: Password Policy check now verifies both libpam-pwquality installed and pwquality.conf present; Sudo logging check now scans /etc/sudoers.d/ drop-in files (not only /etc/sudoers)
 # v2.1.14 - Bugfix: Fix cleanup() to use if-then instead of && chain; && returning false triggered ERR trap under set -e on second EXIT trap call
 # v2.1.13 - Bugfix: Remove pkill block entirely; KillMode=process in service file makes it redundant and it caused set -e to trigger exit 1 under systemd
@@ -36,7 +55,7 @@ set -Eeuo pipefail
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
-readonly VERSION="2.1.14"
+readonly VERSION="2.1.16"
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
 readonly PATH="/usr/sbin:/usr/bin:/sbin:/bin"
@@ -261,60 +280,161 @@ check_ssh_security() {
     local status="OK"
     local details=""
     local issues=0
-    
+
     details+="SSH Security Configuration:@@N@@"
-    
+
     # /etc/ssh/sshd_config: Universal location across all Linux distributions
     if [[ ! -f /etc/ssh/sshd_config ]]; then
         details+="  SSH config not found@@N@@"
         printf "%s|%d|%s" "UNKNOWN" "$issues" "$details"
         return
     fi
-    
-    # Check PermitRootLogin
+
+    # Use `sshd -T` to read the *effective* configuration after all Include
+    # directives and /etc/ssh/sshd_config.d/ drop-ins are processed.
+    # Grepping sshd_config directly misses overrides in drop-in files
+    # (Ubuntu 22.04+ ships /etc/ssh/sshd_config.d/50-cloud-init.conf and
+    # similar; the Include directive at the top of sshd_config gives them
+    # precedence over the main file).
+    local effective_config=""
+    if sshd -T 2>/dev/null | head -1 >/dev/null; then
+        effective_config="$(sshd -T 2>/dev/null)"
+    fi
+
+    if [[ -z "$effective_config" ]]; then
+        details+="  WARN: sshd -T failed; falling back to sshd_config file grep.@@N@@"
+        details+="  Drop-in files in /etc/ssh/sshd_config.d/ will NOT be evaluated.@@N@@"
+        effective_config="$(cat /etc/ssh/sshd_config 2>/dev/null || true)"
+        local _grep_mode=true
+    else
+        local _grep_mode=false
+    fi
+
+    # Helper: extract a value from sshd -T output (lowercase directive names)
+    # or from raw sshd_config (mixed case, leading whitespace).
+    _ssh_val() {
+        local key="$1"
+        if [[ "$_grep_mode" == "false" ]]; then
+            # sshd -T output: "directive value" one per line, all lowercase
+            printf '%s' "$effective_config" | awk -v k="${key,,}" 'tolower($1)==k{print $2; exit}'
+        else
+            printf '%s' "$effective_config" | grep -Ei "^[[:space:]]*${key}[[:space:]]" | awk '{print $2}' | head -1
+        fi
+    }
+
+    # --- PermitRootLogin ---
     local root_login
-    root_login="$(grep -E "^PermitRootLogin" /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' || echo "not-set")"
+    root_login="$(_ssh_val PermitRootLogin)"
+    root_login="${root_login:-not-set}"
     details+="  PermitRootLogin: $root_login@@N@@"
-    
     if [[ "$root_login" == "yes" ]]; then
         status="CRITICAL"
         issues=$((issues + 1))
         details+="  🔴 CRITICAL: Root login is enabled@@N@@"
-    elif [[ "$root_login" == "not-set" ]] || [[ "$root_login" == "prohibit-password" ]]; then
-        if [[ "$root_login" == "prohibit-password" ]]; then
-            details+="  ✓ Root login restricted to key-based auth@@N@@"
-        else
-            details+="  ⚠️  PermitRootLogin not explicitly set (default: prohibit-password)@@N@@"
-        fi
+    elif [[ "$root_login" == "prohibit-password" ]]; then
+        details+="  ✓ Root login restricted to key-based auth@@N@@"
+    elif [[ "$root_login" == "not-set" ]]; then
+        details+="  ⚠️  PermitRootLogin not explicitly set@@N@@"
     else
-        details+="  ✓ Root login properly restricted@@N@@"
+        details+="  ✓ Root login properly restricted ($root_login)@@N@@"
     fi
-    
-    # Check PasswordAuthentication
+
+    # --- PasswordAuthentication ---
+    # Default changed from 'yes' to 'no' in OpenSSH 8.8 (Ubuntu 22.04+).
     local pwd_auth
-    pwd_auth="$(grep -E "^PasswordAuthentication" /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' || echo "not-set")"
+    pwd_auth="$(_ssh_val PasswordAuthentication)"
+    pwd_auth="${pwd_auth:-not-set}"
     details+="  PasswordAuthentication: $pwd_auth@@N@@"
-    
     if [[ "$pwd_auth" == "yes" ]]; then
-        status="WARN"
+        [[ "$status" != "CRITICAL" ]] && status="WARN"
         issues=$((issues + 1))
         details+="  ⚠️  Password authentication is enabled (key-based recommended)@@N@@"
     elif [[ "$pwd_auth" == "no" ]]; then
         details+="  ✓ Key-based authentication enforced@@N@@"
     else
-        details+="  ⚠️  PasswordAuthentication not explicitly set (default: yes)@@N@@"
+        # Effective default is 'no' on Ubuntu 22.04+ / OpenSSH 8.8+
+        details+="  PasswordAuthentication not explicitly set (default: no on OpenSSH 8.8+/Ubuntu 22.04+)@@N@@"
     fi
-    
-    # Check Protocol
+
+    # --- Protocol (informational; Protocol 1 removed in OpenSSH 7.6) ---
     local protocol
-    protocol="$(grep -E "^Protocol" /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' || echo "not-set")"
-    if [[ "$protocol" == "not-set" ]]; then
-        details+="  Protocol: 2 (default)@@N@@"
-        details+="  ✓ SSH Protocol 2 in use@@N@@"
-    else
+    protocol="$(_ssh_val Protocol)"
+    if [[ -n "$protocol" ]]; then
         details+="  Protocol: $protocol@@N@@"
+    else
+        details+="  Protocol: 2 (only supported version; field omitted from modern sshd_config)@@N@@"
     fi
-    
+    details+="  ✓ SSH Protocol 2 in use@@N@@"
+
+    # --- MaxAuthTries ---
+    local max_auth_tries
+    max_auth_tries="$(_ssh_val MaxAuthTries)"
+    max_auth_tries="${max_auth_tries:-not-set}"
+    details+="  MaxAuthTries: $max_auth_tries@@N@@"
+    if [[ "$max_auth_tries" == "not-set" ]] || { [[ "$max_auth_tries" =~ ^[0-9]+$ ]] && [[ "$max_auth_tries" -gt 4 ]]; }; then
+        [[ "$status" != "CRITICAL" ]] && status="WARN"
+        issues=$((issues + 1))
+        details+="  ⚠️  MaxAuthTries should be ≤4 (current: ${max_auth_tries}; default: 6)@@N@@"
+        details+="    Recommendation: MaxAuthTries 4@@N@@"
+    else
+        details+="  ✓ MaxAuthTries is $max_auth_tries@@N@@"
+    fi
+
+    # --- LoginGraceTime ---
+    local login_grace
+    login_grace="$(_ssh_val LoginGraceTime)"
+    login_grace="${login_grace:-not-set}"
+    details+="  LoginGraceTime: $login_grace@@N@@"
+    # Default is 120s; recommended ≤30
+    local grace_sec=120
+    if [[ "$login_grace" =~ ^[0-9]+$ ]]; then
+        grace_sec="$login_grace"
+    elif [[ "$login_grace" =~ ^([0-9]+)m$ ]]; then
+        grace_sec=$(( ${BASH_REMATCH[1]} * 60 ))
+    fi
+    if [[ "$login_grace" == "not-set" ]] || [[ "$grace_sec" -gt 30 ]]; then
+        [[ "$status" != "CRITICAL" ]] && status="WARN"
+        issues=$((issues + 1))
+        details+="  ⚠️  LoginGraceTime should be ≤30s (current: ${login_grace}; default: 120s)@@N@@"
+        details+="    Recommendation: LoginGraceTime 30@@N@@"
+    else
+        details+="  ✓ LoginGraceTime is $login_grace@@N@@"
+    fi
+
+    # --- ClientAliveInterval / ClientAliveCountMax ---
+    local alive_interval alive_count
+    alive_interval="$(_ssh_val ClientAliveInterval)"
+    alive_count="$(_ssh_val ClientAliveCountMax)"
+    alive_interval="${alive_interval:-not-set}"
+    alive_count="${alive_count:-not-set}"
+    details+="  ClientAliveInterval: $alive_interval@@N@@"
+    details+="  ClientAliveCountMax: $alive_count@@N@@"
+    if [[ "$alive_interval" == "not-set" ]] || [[ "$alive_interval" == "0" ]]; then
+        [[ "$status" != "CRITICAL" ]] && status="WARN"
+        issues=$((issues + 1))
+        details+="  ⚠️  Idle session termination not configured (ClientAliveInterval=0 or not set)@@N@@"
+        details+="    Recommendation: ClientAliveInterval 300, ClientAliveCountMax 2@@N@@"
+    else
+        details+="  ✓ Idle session termination configured@@N@@"
+    fi
+
+    # --- AllowUsers / AllowGroups (allowlist) ---
+    local allow_users allow_groups
+    allow_users="$(_ssh_val AllowUsers)"
+    allow_groups="$(_ssh_val AllowGroups)"
+    if [[ -n "$allow_users" ]]; then
+        details+="  AllowUsers: $allow_users@@N@@"
+        details+="  ✓ Login restricted to named users@@N@@"
+    elif [[ -n "$allow_groups" ]]; then
+        details+="  AllowGroups: $allow_groups@@N@@"
+        details+="  ✓ Login restricted to named groups@@N@@"
+    else
+        [[ "$status" != "CRITICAL" ]] && status="WARN"
+        issues=$((issues + 1))
+        details+="  ⚠️  No AllowUsers or AllowGroups set; any valid account may attempt login@@N@@"
+        details+="    Recommendation: AllowGroups sudo (or restrict to specific users)@@N@@"
+    fi
+
     printf "%s|%d|%s" "$status" "$issues" "$details"
 }
 
@@ -692,41 +812,64 @@ check_kernel_security() {
     local status="OK"
     local details=""
     local issues=0
-    
+
     details+="Kernel Security Parameters:@@N@@"
-    
+
     # sysctl: Universal across all Linux distributions
     # Configuration files locations:
     # All distros: /etc/sysctl.conf and /etc/sysctl.d/*.conf
     local params=(
         "kernel.dmesg_restrict"
         "kernel.kptr_restrict"
+        "kernel.randomize_va_space"
+        "kernel.yama.ptrace_scope"
+        "fs.protected_hardlinks"
+        "fs.protected_symlinks"
         "net.ipv4.conf.all.accept_source_route"
         "net.ipv4.conf.all.accept_redirects"
+        "net.ipv4.conf.default.accept_redirects"
         "net.ipv4.conf.all.send_redirects"
+        "net.ipv4.conf.all.rp_filter"
+        "net.ipv4.conf.all.log_martians"
         "net.ipv4.icmp_echo_ignore_broadcasts"
         "net.ipv4.tcp_syncookies"
+        "net.ipv6.conf.all.accept_redirects"
     )
-    
+
     for param in "${params[@]}"; do
         local value
         value="$(sysctl -n "$param" 2>/dev/null || echo "unknown")"
         details+="  $param: $value@@N@@"
     done
-    
-    # Check for recommended settings
-    if [[ "$(sysctl -n net.ipv4.tcp_syncookies 2>/dev/null)" != "1" ]]; then
-        status="WARN"
-        issues=$((issues + 1))
-        details+="  ⚠️  TCP SYN cookies should be enabled (protects against SYN floods)@@N@@"
-    fi
-    
-    if [[ "$(sysctl -n net.ipv4.conf.all.accept_redirects 2>/dev/null)" != "0" ]]; then
-        status="WARN"
-        issues=$((issues + 1))
-        details+="  ⚠️  ICMP redirects should be disabled@@N@@"
-    fi
-    
+
+    # Check recommended settings
+    local _chk
+    _chk() {
+        # _chk <param> <expected_value> <message>
+        local val
+        val="$(sysctl -n "$1" 2>/dev/null || echo "unknown")"
+        if [[ "$val" != "$2" ]]; then
+            [[ "$status" != "CRITICAL" ]] && status="WARN"
+            issues=$((issues + 1))
+            details+="  ⚠️  $3 (current: ${val})@@N@@"
+        fi
+    }
+
+    _chk "kernel.randomize_va_space"                  "2"  "ASLR should be fully enabled (=2)"
+    _chk "kernel.yama.ptrace_scope"                   "1"  "ptrace_scope should be 1 (restrict ptrace to child processes)"
+    _chk "fs.protected_hardlinks"                     "1"  "protected_hardlinks should be 1 (TOCTOU mitigation)"
+    _chk "fs.protected_symlinks"                      "1"  "protected_symlinks should be 1 (TOCTOU mitigation)"
+    _chk "net.ipv4.tcp_syncookies"                    "1"  "TCP SYN cookies should be enabled (protects against SYN floods)"
+    _chk "net.ipv4.conf.all.accept_redirects"         "0"  "ICMP redirects should be disabled (all)"
+    _chk "net.ipv4.conf.default.accept_redirects"     "0"  "ICMP redirects should be disabled (default)"
+    _chk "net.ipv6.conf.all.accept_redirects"         "0"  "IPv6 ICMP redirects should be disabled"
+    _chk "net.ipv4.conf.all.rp_filter"                "1"  "Reverse path filtering should be enabled (anti-spoofing)"
+    _chk "net.ipv4.conf.all.log_martians"             "1"  "Martian packet logging should be enabled"
+    _chk "net.ipv4.conf.all.send_redirects"           "0"  "Sending ICMP redirects should be disabled"
+    _chk "net.ipv4.conf.all.accept_source_route"      "0"  "Source routing should be disabled"
+
+    unset -f _chk
+
     printf "%s|%d|%s" "$status" "$issues" "$details"
 }
 
@@ -865,18 +1008,20 @@ check_file_permissions() {
             actual="$(stat -c "%a" "$file" 2>/dev/null)"
             details+="  $file: $actual (expected: $expected)@@N@@"
             
-            # Check if actual is more permissive than expected
-            if [[ "$actual" != "$expected" ]]; then
-                # Convert to decimal for comparison
-                local actual_dec=$((8#$actual))
-                local expected_dec=$((8#$expected))
-                
-                if [[ $actual_dec -gt $expected_dec ]]; then
+            # Check if actual mode has any bits set that expected does not.
+            # Numeric comparison (actual_dec > expected_dec) is incorrect for
+            # octal permission semantics: 640 > 600 numerically but neither is
+            # strictly "more permissive" than the other in all bit positions.
+            # Correct test: any bit set in actual that is clear in expected.
+            local actual_dec=$((8#$actual))
+            local expected_dec=$((8#$expected))
+            local unexpected_bits=$(( actual_dec & ~expected_dec & 0777 ))
+
+            if [[ $unexpected_bits -ne 0 ]]; then
                     status="WARN"
                     issues=$((issues + 1))
                     details+="    ⚠️  Permissions too permissive@@N@@"
                 fi
-            fi
         else
             details+="  $file: not found@@N@@"
         fi
@@ -922,9 +1067,9 @@ check_sudo_configuration() {
     # /etc/sudoers: Universal location across all Linux distributions
     # Configuration managed by visudo command (universal)
     if [[ -f /etc/sudoers ]]; then
-        # Check for NOPASSWD entries (excluding comments)
+        # Check for NOPASSWD entries (excluding comments) across sudoers and all drop-ins
         local nopasswd_entries
-        nopasswd_entries="$(grep -v "^#" /etc/sudoers 2>/dev/null | grep "NOPASSWD" || echo "")"
+        nopasswd_entries="$(grep -rv '^[[:space:]]*#' /etc/sudoers /etc/sudoers.d/ 2>/dev/null | grep 'NOPASSWD' || echo "")"
         local nopasswd_count=0
         if [[ -n "$nopasswd_entries" ]]; then
             nopasswd_count="$(echo "$nopasswd_entries" | grep -c .)"
@@ -986,6 +1131,195 @@ check_sudo_configuration() {
 }
 
 
+
+check_auditd() {
+    local status="OK"
+    local details=""
+    local issues=0
+
+    details+="Audit Framework (auditd):@@N@@"
+
+    # auditd: Available on all major distributions.
+    # Ubuntu/Debian: apt install auditd audispd-plugins
+    # RHEL/Fedora: dnf install audit
+    # CIS Benchmark: auditd must be installed, enabled, and running.
+    if ! command -v auditctl >/dev/null 2>&1 && ! dpkg -l auditd >/dev/null 2>&1; then
+        status="WARN"
+        issues=$((issues + 1))
+        details+="  ⚠️  auditd is not installed@@N@@"
+        details+="  Install: sudo apt install auditd audispd-plugins@@N@@"
+        details+="  auditd provides tamper-evident records of privileged commands,@@N@@"
+        details+="  file access, and authentication events (CIS baseline requirement).@@N@@"
+        printf "%s|%d|%s" "$status" "$issues" "$details"
+        return
+    fi
+
+    # Check service state
+    if systemctl is-enabled auditd.service >/dev/null 2>&1; then
+        details+="  Service: enabled@@N@@"
+    else
+        status="WARN"
+        issues=$((issues + 1))
+        details+="  ⚠️  auditd.service is not enabled (will not start on boot)@@N@@"
+    fi
+
+    if systemctl is-active --quiet auditd.service 2>/dev/null; then
+        details+="  Status: running@@N@@"
+    else
+        status="WARN"
+        issues=$((issues + 1))
+        details+="  ⚠️  auditd.service is not currently running@@N@@"
+    fi
+
+    # Rule count (informational)
+    if command -v auditctl >/dev/null 2>&1; then
+        local rule_count
+        rule_count="$(auditctl -l 2>/dev/null | grep -c -v '^-a\|^-w' || echo "?")"
+        local rules
+        rules="$(auditctl -l 2>/dev/null | wc -l)"
+        details+="  Active audit rules: $rules@@N@@"
+        if [[ "$rules" -eq 0 ]]; then
+            [[ "$status" != "WARN" ]] && status="WARN"
+            issues=$((issues + 1))
+            details+="  ⚠️  No audit rules loaded — auditd is running but not monitoring anything@@N@@"
+            details+="    Consider: augenrules --load (requires rules in /etc/audit/rules.d/)@@N@@"
+        else
+            details+="  ✓ auditd is active and has rules loaded@@N@@"
+        fi
+    fi
+
+    printf "%s|%d|%s" "$status" "$issues" "$details"
+}
+
+check_shadow_hash_algorithm() {
+    local status="OK"
+    local details=""
+    local issues=0
+
+    details+="Password Hash Algorithm (/etc/shadow):@@N@@"
+
+    if [[ ! -r /etc/shadow ]]; then
+        details+="  /etc/shadow: not readable (requires root)@@N@@"
+        printf "%s|%d|%s" "UNKNOWN" "$issues" "$details"
+        return
+    fi
+
+    # Hash prefix legend:
+    #   $y$  = yescrypt  (Ubuntu 22.04+ default — strongest)
+    #   $6$  = SHA-512   (acceptable)
+    #   $5$  = SHA-256   (weak; upgrade recommended)
+    #   $2b$ = bcrypt    (acceptable)
+    #   $1$  = MD5       (CRITICAL — trivially crackable)
+    #   no $ prefix = DES (CRITICAL — trivially crackable)
+    #   *  or !  = locked account (skip)
+    local md5_accounts=() des_accounts=() sha256_accounts=() ok_accounts=()
+
+    while IFS=: read -r username password _rest; do
+        # Skip locked/disabled accounts and system entries
+        [[ "$password" == "!" || "$password" == "*" || "$password" == "!!" ]] && continue
+        [[ "$password" == "x" ]] && continue   # shadow not used
+        [[ -z "$password" ]] && continue
+
+        if [[ "$password" == '$1$'* ]]; then
+            md5_accounts+=("$username")
+        elif [[ "$password" != '$'* ]]; then
+            # No $ prefix at all — DES crypt (13 chars) or mangled entry
+            des_accounts+=("$username")
+        elif [[ "$password" == '$5$'* ]]; then
+            sha256_accounts+=("$username")
+        else
+            # $y$, $6$, $2b$, or other modern algorithm
+            ok_accounts+=("$username")
+        fi
+    done < /etc/shadow
+
+    if [[ ${#md5_accounts[@]} -gt 0 ]]; then
+        status="CRITICAL"
+        issues=$((issues + 1))
+        details+="  🔴 CRITICAL: ${#md5_accounts[@]} account(s) using MD5 hashes (trivially crackable)@@N@@"
+        for a in "${md5_accounts[@]}"; do details+="    - $a@@N@@"; done
+        details+="  Action: force password reset for each account listed above@@N@@"
+    fi
+
+    if [[ ${#des_accounts[@]} -gt 0 ]]; then
+        status="CRITICAL"
+        issues=$((issues + 1))
+        details+="  🔴 CRITICAL: ${#des_accounts[@]} account(s) using DES hashes (trivially crackable)@@N@@"
+        for a in "${des_accounts[@]}"; do details+="    - $a@@N@@"; done
+        details+="  Action: force password reset for each account listed above@@N@@"
+    fi
+
+    if [[ ${#sha256_accounts[@]} -gt 0 ]]; then
+        [[ "$status" != "CRITICAL" ]] && status="WARN"
+        issues=$((issues + 1))
+        details+="  ⚠️  ${#sha256_accounts[@]} account(s) using SHA-256 (upgrade to yescrypt/SHA-512 recommended)@@N@@"
+        for a in "${sha256_accounts[@]}"; do details+="    - $a@@N@@"; done
+    fi
+
+    if [[ ${#ok_accounts[@]} -gt 0 ]]; then
+        details+="  ✓ ${#ok_accounts[@]} account(s) using yescrypt/SHA-512/bcrypt@@N@@"
+    fi
+
+    if [[ ${#md5_accounts[@]} -eq 0 && ${#des_accounts[@]} -eq 0 && \
+          ${#sha256_accounts[@]} -eq 0 && ${#ok_accounts[@]} -eq 0 ]]; then
+        details+="  No password-bearing accounts found@@N@@"
+    fi
+
+    printf "%s|%d|%s" "$status" "$issues" "$details"
+}
+
+check_unattended_upgrades_scope() {
+    local status="OK"
+    local details=""
+    local issues=0
+
+    details+="Unattended-Upgrades Security Scope:@@N@@"
+
+    # check_automatic_updates() verifies the scheduler is enabled.
+    # This check verifies the *scope*: that security updates are actually
+    # in the Allowed-Origins list in 50unattended-upgrades.
+    local conf="/etc/apt/apt.conf.d/50unattended-upgrades"
+    if [[ ! -f "$conf" ]]; then
+        status="WARN"
+        issues=$((issues + 1))
+        details+="  ⚠️  $conf not found@@N@@"
+        details+="  Install: sudo apt install unattended-upgrades && sudo dpkg-reconfigure unattended-upgrades@@N@@"
+        printf "%s|%d|%s" "$status" "$issues" "$details"
+        return
+    fi
+
+    # Look for an uncommented security origin line.
+    # Standard Ubuntu patterns: "${distro_id}:${distro_codename}-security"
+    # or the expanded form e.g. "Ubuntu:noble-security"
+    local security_origin
+    security_origin="$(grep -E '^\s*"[^"]*-security[^"]*"' "$conf" 2>/dev/null | grep -v '^\s*//' | head -3 || echo "")"
+
+    if [[ -n "$security_origin" ]]; then
+        details+="  ✓ Security origin present in Allowed-Origins:@@N@@"
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            details+="    $line@@N@@"
+        done <<< "$security_origin"
+    else
+        status="WARN"
+        issues=$((issues + 1))
+        details+="  ⚠️  No security origin found in Allowed-Origins@@N@@"
+        details+="  Security updates will not be applied automatically.@@N@@"
+        details+='  Add to '"$conf"':@@N@@'
+        details+='    "${distro_id}:${distro_codename}-security";@@N@@'
+    fi
+
+    # Also report whether Unattended-Upgrade::Remove-Unused-Dependencies is enabled
+    local remove_unused
+    remove_unused="$(grep -E '^\s*Unattended-Upgrade::Remove-Unused-Dependencies' "$conf" 2>/dev/null | grep -v '^\s*//' | head -1 || echo "")"
+    if [[ "$remove_unused" == *"true"* ]]; then
+        details+="  Remove-Unused-Dependencies: true@@N@@"
+    else
+        details+="  Remove-Unused-Dependencies: false or not set (packages may accumulate)@@N@@"
+    fi
+
+    printf "%s|%d|%s" "$status" "$issues" "$details"
+}
 
 check_systemd_timer_schedule() {
   local details base timer_unit out
@@ -1681,7 +2015,46 @@ HTML
     if [[ -t 1 ]]; then
         printf "%s\n" "$display_details"
     fi
-    
+
+    # Auditd
+    section "Checking Audit Framework"
+    result="$(check_auditd)"
+    IFS='|' read -r status issues details <<< "$result"
+    check_results["Auditd"]="$status"
+    check_details["Auditd"]="$details"
+    total_checks=$((total_checks + 1))
+    total_issues=$((total_issues + issues))
+    log "Auditd: $status ($issues issue(s))"
+    display_details="${details//@@N@@/$'\n'}"
+    printf "%s\n" "$display_details" >> "$LOG_FILE"
+    if [[ -t 1 ]]; then printf "%s\n" "$display_details"; fi
+
+    # Shadow hash algorithm
+    section "Checking Password Hash Algorithms"
+    result="$(check_shadow_hash_algorithm)"
+    IFS='|' read -r status issues details <<< "$result"
+    check_results["Shadow Hash Algorithm"]="$status"
+    check_details["Shadow Hash Algorithm"]="$details"
+    total_checks=$((total_checks + 1))
+    total_issues=$((total_issues + issues))
+    log "Shadow Hash Algorithm: $status ($issues issue(s))"
+    display_details="${details//@@N@@/$'\n'}"
+    printf "%s\n" "$display_details" >> "$LOG_FILE"
+    if [[ -t 1 ]]; then printf "%s\n" "$display_details"; fi
+
+    # Unattended-upgrades scope
+    section "Checking Unattended-Upgrades Security Scope"
+    result="$(check_unattended_upgrades_scope)"
+    IFS='|' read -r status issues details <<< "$result"
+    check_results["Unattended-Upgrades Scope"]="$status"
+    check_details["Unattended-Upgrades Scope"]="$details"
+    total_checks=$((total_checks + 1))
+    total_issues=$((total_issues + issues))
+    log "Unattended-Upgrades Scope: $status ($issues issue(s))"
+    display_details="${details//@@N@@/$'\n'}"
+    printf "%s\n" "$display_details" >> "$LOG_FILE"
+    if [[ -t 1 ]]; then printf "%s\n" "$display_details"; fi
+
     # Calculate summary counts
     for check in "${!check_results[@]}"; do
         case "${check_results[$check]}" in
@@ -1696,19 +2069,20 @@ HTML
                 ;;
         esac
     done
-    
+
     # Generate HTML summary
     html_summary_section "$total_checks" "$ok_count" "$warn_count" "$critical_count"
-    
+
     # Generate HTML check sections
     for check in "ICMP Rate Limiting" "Firewall" "SSH Security" "Automatic Updates" \
                  "Web Server Security" "SSL/TLS Certificates" "Open Ports" \
                  "AppArmor" "Fail2ban" "Kernel Security" "Password Policy" \
-                 "Account Security" "File Permissions" "Sudo Configuration"; do
+                 "Account Security" "File Permissions" "Sudo Configuration" \
+                 "Auditd" "Shadow Hash Algorithm" "Unattended-Upgrades Scope"; do
         html_check_section "$check" "${check_results[$check]}" "${check_details[$check]}"
     done
-    
-    # Determine if email should be sent
+
+        # Determine if email should be sent
     local send_email_flag=false
     local email_subject
     local email_recipients

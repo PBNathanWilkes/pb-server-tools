@@ -5,6 +5,12 @@
 # Phasing detection: apt_pkg.DepCache.phasing_applied() (native, in-process).
 # Fallback: apt-cache policy subprocess (only if phasing_applied() raises).
 #
+# v4.2.16 — Fix: _check_lts() now calls `do-release-upgrade -c` without
+#            `-f DistUpgradeViewNonInteractive`. On Ubuntu 24.04+ the -f flag
+#            suppresses all output, causing lts_upgrade_available to always be
+#            false. Removed defunct check-new-release/check-new-release-gtk
+#            paths (no longer present on Ubuntu 24.04+). Added LANG/LC_ALL=C
+#            to prevent localised output from breaking the version regex.
 # v4.2.12
 # v4.2.11
 #
@@ -30,7 +36,7 @@ from datetime import datetime, timezone
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-VERSION = "4.2.14"
+VERSION = "4.2.16"
 SCRIPT_NAME = os.path.basename(__file__)
 
 STATE_DIR      = "/var/lib/pb-maintenance"
@@ -506,42 +512,38 @@ def _check_reboot() -> tuple[bool, list[str]]:
 
 
 def _check_lts() -> tuple[bool, str | None]:
-    """Returns (lts_available, version_string_or_None)."""
-    candidates = [
-        "/usr/lib/ubuntu-release-upgrader/check-new-release",
-        "/usr/lib/ubuntu-release-upgrader/check-new-release-gtk",
-    ]
+    """Returns (lts_available, version_string_or_None).
+
+    Uses ``do-release-upgrade -c`` without ``-f DistUpgradeViewNonInteractive``.
+
+    On Ubuntu 24.04+, ``check-new-release`` and ``check-new-release-gtk`` no
+    longer exist; they were removed when ubuntu-release-upgrader was refactored.
+    The ``-f DistUpgradeViewNonInteractive`` flag suppresses all stdout/stderr
+    output on Ubuntu 24.04+ (do-release-upgrade exits 1 silently), so the
+    regex below never matched and ``lts_upgrade_available`` was always ``false``.
+
+    ``do-release-upgrade -c`` (check-only, no ``-f``) prints
+    ``New release '26.04 LTS' available.`` on stdout when an LTS upgrade
+    exists and the ``/etc/update-manager/release-upgrades`` ``Prompt`` key is
+    set to ``lts`` (Ubuntu Server default).  It exits 0 on a hit and 1 with no
+    output when no upgrade is available.
+
+    LANG/LC_ALL=C prevents localised output from breaking the regex.
+    """
     try:
-        for cmd in candidates:
-            if os.access(cmd, os.X_OK):
-                result = subprocess.run(
-                    [cmd],
-                    capture_output=True,
-                    text=True,
-                    timeout=45,
-                )
-                output = result.stdout + result.stderr
-                break
-        else:
-            result = subprocess.run(
-                [
-                    "do-release-upgrade",
-                    "-c",
-                    "-f",
-                    "DistUpgradeViewNonInteractive",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=45,
-                stdin=subprocess.DEVNULL,
-            )
-            output = result.stdout + result.stderr
+        result = subprocess.run(
+            ["do-release-upgrade", "-c"],
+            capture_output=True,
+            text=True,
+            timeout=45,
+            stdin=subprocess.DEVNULL,
+            env=dict(os.environ, LANG="C", LC_ALL="C"),
+        )
+        output = result.stdout + result.stderr
     except Exception:
         return False, None
 
     m = re.search(r"New release '?(\d+\.\d+)", output)
-    if not m:
-        m = re.search(r"Ubuntu (\d+\.\d+)", output)
     if m:
         return True, m.group(1)
     return False, None

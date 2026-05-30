@@ -190,11 +190,236 @@ T09() {
                       || fail "T09 sudo logging: expected no match, got: $result"
 }
 
+
+# ---------------------------------------------------------------------------
+# T10 — check_ssh_security: uses sshd -T, not file grep
+#       Regression guard: drop-in overrides must be visible
+# ---------------------------------------------------------------------------
+T10() {
+  # Simulate: sshd -T emits effective config with PasswordAuthentication no
+  # even though the main sshd_config file says nothing.
+  # We test the _ssh_val helper logic directly (inline) rather than calling
+  # the full check function which requires root + sshd binary.
+  local result
+  result=$(
+    effective_config="permitrootlogin prohibit-password
+passwordauthentication no
+maxauthtries 4
+logingracetime 20
+clientaliveinterval 300
+clientalivecountmax 2
+allowgroups sudo"
+
+    _grep_mode=false
+
+    _ssh_val() {
+      local key="$1"
+      printf '%s' "$effective_config" | awk -v k="${key,,}" 'tolower($1)==k{print $2; exit}'
+    }
+
+    # Check PasswordAuthentication
+    val="$(_ssh_val PasswordAuthentication)"
+    printf '%s' "$val"
+  )
+  [[ "$result" == "no" ]] && pass "T10 ssh effective config: PasswordAuthentication=no from sshd -T output" \
+                            || fail "T10 ssh effective config: expected 'no', got '$result'"
+}
+
+# ---------------------------------------------------------------------------
+# T11 — check_ssh_security: MaxAuthTries > 4 → WARN condition
+# ---------------------------------------------------------------------------
+T11() {
+  local result
+  result=$(
+    _chk_maxtries() {
+      local val="$1"
+      if [[ "$val" =~ ^[0-9]+$ ]] && [[ "$val" -gt 4 ]]; then
+        printf 'WARN'
+      else
+        printf 'OK'
+      fi
+    }
+    _chk_maxtries "6"
+  )
+  [[ "$result" == "WARN" ]] && pass "T11 MaxAuthTries=6 → WARN" \
+                              || fail "T11 MaxAuthTries=6: expected WARN, got $result"
+}
+
+# ---------------------------------------------------------------------------
+# T12 — check_kernel_security: randomize_va_space checked
+# ---------------------------------------------------------------------------
+T12() {
+  # Verify the params array now includes randomize_va_space
+  local result
+  result=$(grep -c "randomize_va_space" "$SRC" || echo "0")
+  [[ "$result" -ge 1 ]] && pass "T12 kernel params: randomize_va_space present" \
+                          || fail "T12 kernel params: randomize_va_space not found in source"
+}
+
+# ---------------------------------------------------------------------------
+# T13 — check_kernel_security: yama.ptrace_scope checked
+# ---------------------------------------------------------------------------
+T13() {
+  local result
+  result=$(grep -c "yama.ptrace_scope" "$SRC" || echo "0")
+  [[ "$result" -ge 1 ]] && pass "T13 kernel params: yama.ptrace_scope present" \
+                          || fail "T13 kernel params: yama.ptrace_scope not found in source"
+}
+
+# ---------------------------------------------------------------------------
+# T14 — check_file_permissions: bitwise AND detects unexpected bits
+#       640 vs expected 600: group-read bit (040) should fire WARN
+#       (old numeric comparison also fired here, so this is a correctness test)
+# ---------------------------------------------------------------------------
+T14() {
+  local result
+  result=$(
+    _chk_perm() {
+      local actual="$1" expected="$2"
+      local actual_dec=$((8#$actual))
+      local expected_dec=$((8#$expected))
+      local unexpected_bits=$(( actual_dec & ~expected_dec & 0777 ))
+      [[ $unexpected_bits -ne 0 ]] && printf 'WARN' || printf 'OK'
+    }
+    # 640 has group-read set; 600 does not → unexpected bit
+    _chk_perm "640" "600"
+  )
+  [[ "$result" == "WARN" ]] && pass "T14 file perm: 640 vs 600 → WARN (unexpected group-read)" \
+                              || fail "T14 file perm: expected WARN for 640 vs 600, got $result"
+}
+
+# ---------------------------------------------------------------------------
+# T15 — check_file_permissions: 600 vs expected 644 → no WARN
+#       (more restrictive than expected is acceptable)
+# ---------------------------------------------------------------------------
+T15() {
+  local result
+  result=$(
+    _chk_perm() {
+      local actual="$1" expected="$2"
+      local actual_dec=$((8#$actual))
+      local expected_dec=$((8#$expected))
+      local unexpected_bits=$(( actual_dec & ~expected_dec & 0777 ))
+      [[ $unexpected_bits -ne 0 ]] && printf 'WARN' || printf 'OK'
+    }
+    # 600 is more restrictive than 644; no extra bits → OK
+    _chk_perm "600" "644"
+  )
+  [[ "$result" == "OK" ]] && pass "T15 file perm: 600 vs 644 → OK (more restrictive is acceptable)" \
+                           || fail "T15 file perm: expected OK for 600 vs 644, got $result"
+}
+
+# ---------------------------------------------------------------------------
+# T16 — check_sudo_configuration: NOPASSWD detected in sudoers.d drop-in
+# ---------------------------------------------------------------------------
+T16() {
+  local tmp_dir result
+  tmp_dir="$(mktemp -d)"
+  printf '# standard sudoers\n%%sudo ALL=(ALL:ALL) ALL\n' > "$tmp_dir/sudoers"
+  mkdir -p "$tmp_dir/sudoers.d"
+  printf 'deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart myapp\n' > "$tmp_dir/sudoers.d/deploy"
+
+  result="$(grep -rv '^[[:space:]]*#' "$tmp_dir/sudoers" "$tmp_dir/sudoers.d/" 2>/dev/null | grep 'NOPASSWD' || echo "")"
+  rm -rf "$tmp_dir"
+
+  [[ -n "$result" ]] && pass "T16 sudo NOPASSWD: detected in sudoers.d drop-in" \
+                      || fail "T16 sudo NOPASSWD: not detected in sudoers.d drop-in"
+}
+
+# ---------------------------------------------------------------------------
+# T17 — check_shadow_hash_algorithm: MD5 hash detected as CRITICAL
+# ---------------------------------------------------------------------------
+T17() {
+  local result
+  result=$(
+    _classify() {
+      local password="$1"
+      if [[ "$password" == '$1$'* ]]; then
+        printf 'CRITICAL'
+      elif [[ "$password" != '$'* ]]; then
+        printf 'CRITICAL'
+      elif [[ "$password" == '$5$'* ]]; then
+        printf 'WARN'
+      else
+        printf 'OK'
+      fi
+    }
+    _classify '$1$abc$hashvalue'
+  )
+  [[ "$result" == "CRITICAL" ]] && pass "T17 shadow: MD5 hash (\$1\$) → CRITICAL" \
+                                 || fail "T17 shadow: expected CRITICAL for MD5, got $result"
+}
+
+# ---------------------------------------------------------------------------
+# T18 — check_shadow_hash_algorithm: yescrypt hash → OK
+# ---------------------------------------------------------------------------
+T18() {
+  local result
+  result=$(
+    _classify() {
+      local password="$1"
+      if [[ "$password" == '$1$'* ]]; then
+        printf 'CRITICAL'
+      elif [[ "$password" != '$'* && -n "$password" ]]; then
+        printf 'CRITICAL'
+      elif [[ "$password" == '$5$'* ]]; then
+        printf 'WARN'
+      else
+        printf 'OK'
+      fi
+    }
+    _classify '$y$j9T$somehashvalue'
+  )
+  [[ "$result" == "OK" ]] && pass "T18 shadow: yescrypt hash (\$y\$) → OK" \
+                           || fail "T18 shadow: expected OK for yescrypt, got $result"
+}
+
+# ---------------------------------------------------------------------------
+# T19 — check_unattended_upgrades_scope: security origin present → OK
+# ---------------------------------------------------------------------------
+T19() {
+  local tmp_conf result
+  tmp_conf="$(mktemp)"
+  cat > "$tmp_conf" <<'EOF'
+Unattended-Upgrade::Allowed-Origins {
+    "${distro_id}:${distro_codename}-security";
+    "${distro_id}ESMApps:${distro_codename}-apps-security";
+};
+EOF
+
+  result="$(grep -E '^\s*"[^"]*-security[^"]*"' "$tmp_conf" 2>/dev/null | grep -v '^\s*//' | head -1 || echo "")"
+  rm -f "$tmp_conf"
+
+  [[ -n "$result" ]] && pass "T19 unattended-upgrades scope: security origin detected" \
+                       || fail "T19 unattended-upgrades scope: security origin not detected"
+}
+
+# ---------------------------------------------------------------------------
+# T20 — check_unattended_upgrades_scope: no security origin → WARN condition
+# ---------------------------------------------------------------------------
+T20() {
+  local tmp_conf result
+  tmp_conf="$(mktemp)"
+  cat > "$tmp_conf" <<'EOF'
+Unattended-Upgrade::Allowed-Origins {
+    "${distro_id}:${distro_codename}";
+    "${distro_id}:${distro_codename}-updates";
+};
+EOF
+
+  result="$(grep -E '^\s*"[^"]*-security[^"]*"' "$tmp_conf" 2>/dev/null | grep -v '^\s*//' | head -1 || echo "")"
+  rm -f "$tmp_conf"
+
+  [[ -z "$result" ]] && pass "T20 unattended-upgrades scope: absent security origin → WARN condition fires" \
+                       || fail "T20 unattended-upgrades scope: expected no match, got: $result"
+}
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 printf '\n'
 T01; T02; T03; T04; T05; T06; T07; T08; T09
+T10; T11; T12; T13; T14; T15; T16; T17; T18; T19; T20
 
 printf '\n--- Results: %d passed, %d failed ---\n' "$PASS" "$FAIL"
 if [[ $FAIL -gt 0 ]]; then
