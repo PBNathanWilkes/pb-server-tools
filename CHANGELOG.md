@@ -4,6 +4,30 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.4] — 2026-05-30
+
+### Fixed
+
+- `overrides/pblinuxutility/` drop-ins: replaced empty-string resets with
+  explicit permissive values for enumerated/boolean directives. This host's
+  systemd version silently ignores empty-string resets for `ProtectSystem=`,
+  `ProtectHome=`, `PrivateTmp=`, `ProtectKernelModules=`, and
+  `ProtectKernelTunables=`, leaving base unit values active. KFC-R02 updated.
+
+### Files changed
+
+- `overrides/pblinuxutility/pb-check-for-updates.service.d/no-namespace.conf`
+- `overrides/pblinuxutility/pb-check-for-updates-monthly.service.d/no-namespace.conf`
+- `overrides/pblinuxutility/pb-security-hardening-check.service.d/no-namespace.conf`
+- `overrides/pblinuxutility/pb-security-hardening-check-monthly.service.d/no-namespace.conf`
+- `overrides/pblinuxutility/README.md`
+- `check-for-updates/CHANGELOG.md`
+- `security-hardening/CHANGELOG.md`
+- `DEV-GUIDE.md`
+- `CHANGELOG.md` (this file)
+
+---
+
 ## [1.0.3] — 2026-05-30
 
 ### Fixed

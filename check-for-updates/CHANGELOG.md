@@ -4,6 +4,32 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [4.2.20] — 2026-05-30
+
+### Fixed
+
+- `overrides/pblinuxutility/pb-check-for-updates*.service.d/no-namespace.conf`:
+  replaced empty-string resets with explicit permissive values. This host's
+  systemd version does not accept empty-string resets for enumerated
+  (`ProtectSystem=`, `ProtectHome=`) or boolean (`ProtectKernelModules=`,
+  `ProtectKernelTunables=`) directives — they log "Failed to parse … value,
+  ignoring" and leave the base unit values active, causing `ProtectSystem=strict`
+  to mark `/tmp` read-only and the script to fail with exit 1 at log file
+  creation. Fixed by using `ProtectSystem=no`, `ProtectHome=no`,
+  `ProtectKernelModules=false`, `ProtectKernelTunables=false`.
+  List directives (`ReadOnlyPaths=`, `ReadWritePaths=`) continue to use
+  empty-string resets, which are valid for list-type directives.
+
+### Files changed
+
+- `overrides/pblinuxutility/pb-check-for-updates.service.d/no-namespace.conf`
+- `overrides/pblinuxutility/pb-check-for-updates-monthly.service.d/no-namespace.conf`
+- `overrides/pblinuxutility/README.md`
+- `DEV-GUIDE.md` (KFC-R02 updated)
+- `CHANGELOG.md` (this file)
+
+---
+
 ## [4.2.19] — 2026-05-30
 
 ### Fixed

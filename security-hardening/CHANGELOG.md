@@ -4,6 +4,26 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.1.25] — 2026-05-30
+
+### Fixed
+
+- `overrides/pblinuxutility/pb-security-hardening-check*.service.d/no-namespace.conf`:
+  replaced empty-string resets with explicit permissive values for enumerated
+  and boolean directives. Same root cause as check-for-updates v4.2.20.
+  `PrivateTmp=false`, `ProtectSystem=no`, `ProtectHome=no`,
+  `ProtectKernelModules=false`, `ProtectKernelTunables=false` are now used.
+
+### Files changed
+
+- `overrides/pblinuxutility/pb-security-hardening-check.service.d/no-namespace.conf`
+- `overrides/pblinuxutility/pb-security-hardening-check-monthly.service.d/no-namespace.conf`
+- `overrides/pblinuxutility/README.md`
+- `DEV-GUIDE.md` (KFC-R02 updated)
+- `CHANGELOG.md` (this file)
+
+---
+
 ## [2.1.24] — 2026-05-30
 
 ### Fixed

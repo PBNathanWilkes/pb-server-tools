@@ -48,7 +48,7 @@ before alerting (seen_count ≥ 2 gate).
 - **Timers:** `pb-check-for-updates.timer` (daily), `pb-check-for-updates-monthly.timer`
 - **State:** `/var/lib/pb-maintenance/patch-state.json`
 - **Logs:** `/backup/patch-logs/`
-- **Version:** v4.2.19
+- **Version:** v4.2.20
 
 ### security-hardening
 
@@ -61,7 +61,7 @@ Emails an HTML report with per-check status badges.
 - **Script:** `/usr/local/libexec/pb-maintenance/security-hardening-check.sh`
 - **Timers:** `pb-security-hardening-check.timer` (weekly), `pb-security-hardening-check-monthly.timer`
 - **Logs:** `/backup/security-logs/`
-- **Version:** v2.1.24
+- **Version:** v2.1.25
 
 ### login-compliance
 
