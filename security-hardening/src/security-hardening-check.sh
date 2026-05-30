@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # security-hardening-check.sh — Check security hardening status and email a report (HTML)
 # Executed via systemd timers (cron no longer used). Requires: mailx (s-nail/bsd-mailx), msmtp (or other MTA)
-# v2.1.15
+# v2.1.18
 #
 # DISTRIBUTION COMPATIBILITY:
 # Primary: Ubuntu Server (all versions with systemd)
@@ -10,6 +10,12 @@
 # Note: Raspberry Pi OS-specific considerations are noted throughout the script
 #
 # VERSION HISTORY (for maintainers):
+# v2.1.18 - Bugfix: sshd -T invocation now includes -C context flags
+#            (user=root,host=localhost,addr=127.0.0.1,laddr=127.0.0.1,lport=22).
+#            OpenSSH >=6.5 requires a synthetic connection context when any Match
+#            block is present; without -C, sshd -T exits non-zero even when sshd
+#            is healthy, causing a false fallback to file-grep that silently misses
+#            all drop-in overrides in /etc/ssh/sshd_config.d/.
 # v2.1.17 - Bugfix: ERR trap fired spuriously on every [[ "$status" != "CRITICAL" ]] && status="WARN"
 #            expression. Under set -Eeuo pipefail, when $status IS "CRITICAL" the [[ ]] test exits 1
 #            (false), the && short-circuits, and set -E propagates the exit-1 to the ERR trap.
@@ -64,7 +70,7 @@ set -Eeuo pipefail
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
-readonly VERSION="2.1.17"
+readonly VERSION="2.1.18"
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
 readonly PATH="/usr/sbin:/usr/bin:/sbin:/bin"
@@ -305,9 +311,18 @@ check_ssh_security() {
     # (Ubuntu 22.04+ ships /etc/ssh/sshd_config.d/50-cloud-init.conf and
     # similar; the Include directive at the top of sshd_config gives them
     # precedence over the main file).
+    #
+    # The -C flag supplies a synthetic connection context (user, host, addr,
+    # laddr, lport).  OpenSSH >=6.5 requires this context when any Match
+    # block is present in the configuration; without it, sshd -T exits
+    # non-zero even when sshd itself is healthy, causing a false fallback to
+    # file-grep and missing all drop-in overrides.  The values are synthetic
+    # (localhost loopback) — they satisfy the parser without implying a real
+    # connection.
     local effective_config=""
-    if sshd -T 2>/dev/null | head -1 >/dev/null; then
-        effective_config="$(sshd -T 2>/dev/null)"
+    local _sshd_T_cmd="sshd -T -C user=root,host=localhost,addr=127.0.0.1,laddr=127.0.0.1,lport=22"
+    if $_sshd_T_cmd 2>/dev/null | head -1 >/dev/null; then
+        effective_config="$($_sshd_T_cmd 2>/dev/null)"
     fi
 
     if [[ -z "$effective_config" ]]; then

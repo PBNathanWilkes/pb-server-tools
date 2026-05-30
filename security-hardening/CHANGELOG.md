@@ -4,6 +4,49 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.1.18] — 2026-05-29
+
+### Fixed
+
+- **`check_ssh_security()`: `sshd -T` now invoked with `-C` context flags.**
+  OpenSSH ≥6.5 requires a synthetic connection context
+  (`user=root,host=localhost,addr=127.0.0.1,laddr=127.0.0.1,lport=22`) when
+  any `Match` block is present in the server configuration. Without `-C`,
+  `sshd -T` exits non-zero even when `sshd` itself is healthy. The script
+  treated any non-zero exit as a failure and fell back to grepping
+  `/etc/ssh/sshd_config` directly — silently missing all directives set in
+  drop-ins under `/etc/ssh/sshd_config.d/` (e.g. `99-hardening.conf`).
+  The result was that hardening directives applied via drop-ins were reported
+  as absent (WARN) even though sshd was enforcing them.
+
+### Tests
+
+- `tests/unit/test_security_hardening.sh`: added T23.
+  T23: regression guard — source must contain the `-C` context flag string
+  in the `sshd -T` invocation; a bare `sshd -T` without `-C` is a defect.
+
+### KFC — new entry
+
+**`check-for-updates` / `security-hardening` shared pattern — KFC-SH01**
+(security-hardening component, `check_ssh_security`)
+
+- **Version observed:** v2.1.16–v2.1.17
+- **Failure mode:** `sshd -T` exits non-zero on hosts that have `Match`
+  blocks in `sshd_config` (including the Ubuntu default
+  `/etc/ssh/sshd_config.d/50-cloud-init.conf`). Script falls back to
+  file-grep, missing all drop-in directives. SSH checks report WARN for
+  settings that are in fact configured.
+- **Root cause:** OpenSSH ≥6.5 requires `-C user=…,host=…,addr=…` context
+  when evaluating `Match` blocks. Without it, `sshd -T` cannot resolve
+  conditional blocks and aborts.
+- **Fix applied:** v2.1.18 — `sshd -T -C user=root,host=localhost,addr=127.0.0.1,laddr=127.0.0.1,lport=22`
+- **Current-version mitigation:** Fallback to file-grep is retained; it
+  now only triggers if the context-injected call also fails (true pre-install
+  environment or corrupt sshd binary). T23 guards against regression to bare
+  `sshd -T`.
+
+---
+
 ## [2.1.17] — 2026-05-29
 
 ### Fixed

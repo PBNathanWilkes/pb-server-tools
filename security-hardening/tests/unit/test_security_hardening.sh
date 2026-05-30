@@ -469,12 +469,25 @@ T22() {
 }
 
 # ---------------------------------------------------------------------------
+# T23 — sshd -T context flags: -C flag present in source invocation
+#       Regression guard: bare 'sshd -T' (no -C) fails when Match blocks
+#       are present; the fix must use -C with a synthetic connection context.
+# ---------------------------------------------------------------------------
+T23() {
+  local result
+  result=$(grep -c "\-C user=root,host=localhost,addr=127\.0\.0\.1" "$SRC" || echo "0")
+  [[ "$result" -ge 1 ]] \
+    && pass "T23 sshd -T: -C context flags present in source (Match-block regression guard)" \
+    || fail "T23 sshd -T: -C context flags not found — bare 'sshd -T' will fail with Match blocks"
+}
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 printf '\n'
 T01; T02; T03; T04; T05; T06; T07; T08; T09
 T10; T11; T12; T13; T14; T15; T16; T17; T18; T19; T20
-T21; T22
+T21; T22; T23
 
 printf '\n--- Results: %d passed, %d failed ---\n' "$PASS" "$FAIL"
 if [[ $FAIL -gt 0 ]]; then
