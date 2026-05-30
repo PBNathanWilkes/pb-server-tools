@@ -6,14 +6,14 @@
 #
 # What it does:
 #   1. Verifies prerequisites
-#   2. Deploys server-sanity-check.sh to /usr/local/bin/
-#   3. Runs a smoke test (--help exits 0)
+#   2. Deploys server-sanity-check to /usr/local/bin/
+#   3. Runs a smoke test (syntax check)
 #
 # Production layout:
-#   /usr/local/bin/server-sanity-check.sh  (0755 root:root)
+#   /usr/local/bin/server-sanity-check  (0755 root:root)
 #
 # Usage after install:
-#   sudo server-sanity-check.sh
+#   sudo server-sanity-check
 
 set -Eeuo pipefail
 
@@ -23,7 +23,7 @@ set -Eeuo pipefail
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SRC_DIR="${SCRIPT_DIR}/src"
 readonly BIN_DIR="/usr/local/bin"
-readonly DEST="${BIN_DIR}/server-sanity-check.sh"
+readonly DEST="${BIN_DIR}/server-sanity-check"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -87,7 +87,7 @@ main() {
 
   printf '\n[install] Deployment complete.\n'
   printf '\nUsage:\n'
-  printf '  sudo server-sanity-check.sh\n\n'
+  printf '  sudo server-sanity-check\n\n'
 }
 
 main "$@"

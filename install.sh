@@ -8,6 +8,7 @@
 #   check-for-updates   patch monitoring + systemd timers
 #   security-hardening  security posture checks + systemd timers
 #   login-compliance    login-time banner check
+#   server-sanity       read-only infrastructure sanity check
 #
 # Options:
 #   --only <component>  Install a single named component only
@@ -39,6 +40,7 @@ Components:
   check-for-updates    Patch monitoring (systemd timers, email reports)
   security-hardening   Security posture checks (systemd timers, email reports)
   login-compliance     Login-time banner (manual .bashrc step required)
+  server-sanity        Read-only infrastructure sanity check
 
 Options:
   --only <component>   Install only the named component
@@ -179,6 +181,7 @@ main() {
     run_component "check-for-updates"
     run_component "security-hardening"
     run_component "login-compliance"
+    run_component "server-sanity"
   fi
 
   printf '\n[pb-server-tools] All components installed successfully.\n'
@@ -188,6 +191,7 @@ main() {
   printf '  3. Run a manual check: sudo /usr/local/libexec/pb-maintenance/security-hardening-check.sh --validate\n'
   printf '  4. Add login-compliance snippet to ~/.bashrc (printed during login-compliance install)\n'
   printf '  5. Confirm timers: systemctl list-timers --all --no-pager\n'
+  printf '  6. Run sanity check: sudo server-sanity-check\n'
 }
 
 main "$@"
