@@ -302,8 +302,12 @@ check_cert_expiry() {
   fi
 
   local enddate
-  enddate=$(openssl s_client -connect "${host}:${port}" -servername "$host" \
-              </dev/null 2>/dev/null \
+  # echo Q sends a TLS close-notify so s_client exits immediately after
+  # the handshake rather than waiting for stdin EOF (which some servers
+  # do not honour, causing an indefinite hang).
+  enddate=$(echo Q \
+            | openssl s_client -connect "${host}:${port}" -servername "$host" \
+                2>/dev/null \
             | openssl x509 -noout -enddate 2>/dev/null \
             | sed 's/notAfter=//')
 
@@ -631,9 +635,10 @@ fi
 
 check_dir "$LIGHTTPD_LOG" "/var/log/lighttpd"
 
-check_last_run lighttpd.service
+# lighttpd is a persistent daemon, not a oneshot — InactiveEnterTimestamp
+# is never set, so check_last_run would always warn "no run recorded yet".
+# Active state was already verified above; skip the last-run check here.
 
-# TLS certificate expiry
 check_cert_expiry premiumbrandsholdings.com 443
 
 

@@ -4,6 +4,28 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.2.1] — 2026-05-30
+
+### Fixed
+
+- **`check_cert_expiry`:** replaced `</dev/null` with `echo Q |` to close
+  the `openssl s_client` session after the TLS handshake.  Some servers do
+  not send EOF in response to stdin closure, causing an indefinite hang.
+  `echo Q` sends a TLS close-notify and exits immediately.
+- **lighttpd section:** removed `check_last_run lighttpd.service`.
+  lighttpd is a persistent daemon; systemd never sets `InactiveEnterTimestamp`
+  for it, so `check_last_run` always emitted a spurious "no run recorded yet"
+  warning.  Active state is already confirmed by the `systemctl is-active`
+  check above it.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md`
+- `CHANGELOG.md` (repo)
+
+---
+
 ## [1.2.0] — 2026-05-30
 
 ### Added

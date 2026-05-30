@@ -4,6 +4,23 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.9] — 2026-05-30
+
+### Fixed
+
+- `server-sanity` v1.2.1: `check_cert_expiry` hang on servers that do not
+  send EOF on stdin closure — fixed by `echo Q |` pattern.  Removed
+  spurious `check_last_run lighttpd.service` warning (persistent daemon,
+  never has `InactiveEnterTimestamp`).
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md`
+- `CHANGELOG.md` (this file)
+
+---
+
 ## [1.0.8] — 2026-05-30
 
 ### Added
