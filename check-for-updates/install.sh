@@ -9,8 +9,9 @@
 #   2. Runs all unit tests (Bash + Python); aborts on any failure
 #   3. Removes __pycache__ and .pytest_cache from the source tree
 #   4. Deploys source files to production locations with correct permissions
-#   5. Verifies deployed systemd units match source; aborts if any differ
-#   6. Reloads systemd and re-enables timers
+#   5. Deploys host-specific drop-in overrides (e.g. no-namespace on restricted hosts)
+#   6. Verifies deployed systemd units match source; aborts if any differ
+#   7. Reloads systemd and re-enables timers
 #
 # Production layout:
 #   /usr/local/libexec/pb-maintenance/   check-for-updates.sh (0750 root:root)
@@ -43,6 +44,20 @@ readonly SERVICES=(
 readonly TIMERS=(
   pb-check-for-updates.timer
   pb-check-for-updates-monthly.timer
+)
+
+# Hosts that cannot honour CLONE_NEWNS (mount namespace) sandbox directives.
+# The installer deploys a drop-in override for each listed host that resets
+# the offending directives.  Source unit files are never modified.
+# See overrides/<hostname>/README.md and DEV-GUIDE.md §6 KFC-R02.
+readonly NAMESPACE_OVERRIDE_HOSTS=(
+  pblinuxutility
+)
+# Service units (not timers) that receive the no-namespace drop-in on
+# restricted hosts.
+readonly NAMESPACE_OVERRIDE_SERVICES=(
+  pb-check-for-updates.service
+  pb-check-for-updates-monthly.service
 )
 
 # ---------------------------------------------------------------------------
@@ -183,7 +198,49 @@ deploy_files() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 5 — Verify deployed units match source
+# Step 5 — Deploy host-specific drop-in overrides
+#
+# On hosts listed in NAMESPACE_OVERRIDE_HOSTS (those whose kernel/container
+# runtime cannot honour CLONE_NEWNS), deploy a drop-in that resets the
+# namespace-requiring sandbox directives.  This resolves exit 226
+# (EXIT_NAMESPACE) without modifying the source unit files, preserving full
+# sandboxing on capable hosts such as PBWEBSRV03.
+#
+# The override source lives at:
+#   overrides/<hostname>/<unit>.d/no-namespace.conf
+# and is installed to:
+#   /etc/systemd/system/<unit>.d/no-namespace.conf
+# ---------------------------------------------------------------------------
+deploy_overrides() {
+  local current_host
+  current_host="$(hostname -s)"
+
+  local host
+  for host in "${NAMESPACE_OVERRIDE_HOSTS[@]}"; do
+    if [[ "$current_host" == "$host" ]]; then
+      info "Host ${host}: deploying namespace-override drop-ins"
+
+      local unit
+      for unit in "${NAMESPACE_OVERRIDE_SERVICES[@]}"; do
+        local src="${SCRIPT_DIR}/../overrides/${host}/${unit}.d/no-namespace.conf"
+        local drop_in_dir="${SYSTEMD_DEST}/${unit}.d"
+        local dst="${drop_in_dir}/no-namespace.conf"
+
+        if [[ ! -f "$src" ]]; then
+          die "Override source not found: ${src}"
+        fi
+
+        mkdir -p "$drop_in_dir"
+        install -m 0644 -o root -g root "$src" "$dst"
+        ok "installed ${dst}"
+      done
+      return 0
+    fi
+  done
+}
+
+# ---------------------------------------------------------------------------
+# Step 6 — Verify deployed units match source
 #
 # Guards against the failure mode where stale unit files in /etc/systemd/system/
 # shadow freshly-deployed files elsewhere, or where the deploy step silently
@@ -217,7 +274,7 @@ verify_units() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 6 — Reload systemd and re-enable timers
+# Step 7 — Reload systemd and re-enable timers
 # ---------------------------------------------------------------------------
 reload_systemd() {
   info "Reloading systemd"
@@ -240,6 +297,7 @@ main() {
   run_tests
   cleanup_pycache
   deploy_files
+  deploy_overrides
   verify_units
   reload_systemd
 

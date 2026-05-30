@@ -4,6 +4,37 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.1] — 2026-05-30
+
+### Fixed
+
+- `check-for-updates/install.sh`, `security-hardening/install.sh`: added
+  `deploy_overrides()` step that installs host-specific systemd drop-in
+  overrides for hosts in `NAMESPACE_OVERRIDE_HOSTS`.  Resolves exit 226
+  (EXIT_NAMESPACE) on pblinuxutility caused by namespace-requiring sandbox
+  directives (`ProtectSystem=strict`, `PrivateTmp=true`,
+  `ProtectKernelModules=true`, `ProtectKernelTunables=true`) that the host's
+  kernel or container runtime cannot honour.  Source unit files unchanged;
+  sandboxing on PBWEBSRV03 unaffected.
+
+- `DEV-GUIDE.md §6`: added KFC-R02.
+
+### Files changed
+
+- `check-for-updates/install.sh`
+- `check-for-updates/CHANGELOG.md`
+- `security-hardening/install.sh`
+- `security-hardening/CHANGELOG.md`
+- `overrides/pblinuxutility/pb-check-for-updates.service.d/no-namespace.conf` (new)
+- `overrides/pblinuxutility/pb-check-for-updates-monthly.service.d/no-namespace.conf` (new)
+- `overrides/pblinuxutility/pb-security-hardening-check.service.d/no-namespace.conf` (new)
+- `overrides/pblinuxutility/pb-security-hardening-check-monthly.service.d/no-namespace.conf` (new)
+- `overrides/pblinuxutility/README.md` (new)
+- `DEV-GUIDE.md`
+- `CHANGELOG.md` (this file)
+
+---
+
 ## [1.0.0] — 2026-05-28
 
 ### Added

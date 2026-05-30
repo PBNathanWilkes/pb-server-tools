@@ -8,8 +8,9 @@
 #   1. Verifies prerequisites
 #   2. Runs unit tests; aborts on any failure
 #   3. Deploys source files to production locations with correct permissions
-#   4. Verifies deployed systemd units match source; aborts if any differ
-#   5. Reloads systemd and re-enables timers
+#   4. Deploys host-specific drop-in overrides (e.g. no-namespace on restricted hosts)
+#   5. Verifies deployed systemd units match source; aborts if any differ
+#   6. Reloads systemd and re-enables timers
 
 set -Eeuo pipefail
 
@@ -34,6 +35,16 @@ readonly SERVICES=(
 readonly TIMERS=(
   pb-security-hardening-check.timer
   pb-security-hardening-check-monthly.timer
+)
+
+# Hosts that cannot honour CLONE_NEWNS (mount namespace) sandbox directives.
+# See overrides/<hostname>/README.md and DEV-GUIDE.md §6 KFC-R02.
+readonly NAMESPACE_OVERRIDE_HOSTS=(
+  pblinuxutility
+)
+readonly NAMESPACE_OVERRIDE_SERVICES=(
+  pb-security-hardening-check.service
+  pb-security-hardening-check-monthly.service
 )
 
 # ---------------------------------------------------------------------------
@@ -100,7 +111,44 @@ deploy_files() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 4 — Verify deployed units match source
+# Step 4 — Deploy host-specific drop-in overrides
+#
+# On hosts listed in NAMESPACE_OVERRIDE_HOSTS, deploy a drop-in that resets
+# namespace-requiring sandbox directives (ProtectSystem=strict, PrivateTmp=true,
+# ProtectKernelModules=true, ProtectKernelTunables=true).  These cause exit 226
+# (EXIT_NAMESPACE) on container/VM hosts that do not permit CLONE_NEWNS.
+# Source unit files are not modified; sandboxing on capable hosts is preserved.
+# ---------------------------------------------------------------------------
+deploy_overrides() {
+  local current_host
+  current_host="$(hostname -s)"
+
+  local host
+  for host in "${NAMESPACE_OVERRIDE_HOSTS[@]}"; do
+    if [[ "$current_host" == "$host" ]]; then
+      info "Host ${host}: deploying namespace-override drop-ins"
+
+      local unit
+      for unit in "${NAMESPACE_OVERRIDE_SERVICES[@]}"; do
+        local src="${SCRIPT_DIR}/../overrides/${host}/${unit}.d/no-namespace.conf"
+        local drop_in_dir="${SYSTEMD_DEST}/${unit}.d"
+        local dst="${drop_in_dir}/no-namespace.conf"
+
+        if [[ ! -f "$src" ]]; then
+          die "Override source not found: ${src}"
+        fi
+
+        mkdir -p "$drop_in_dir"
+        install -m 0644 -o root -g root "$src" "$dst"
+        ok "installed ${dst}"
+      done
+      return 0
+    fi
+  done
+}
+
+# ---------------------------------------------------------------------------
+# Step 5 — Verify deployed units match source
 # ---------------------------------------------------------------------------
 verify_units() {
   info "Verifying deployed systemd units match source"
@@ -129,7 +177,7 @@ verify_units() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 5 — Reload systemd and re-enable timers
+# Step 6 — Reload systemd and re-enable timers
 # ---------------------------------------------------------------------------
 reload_systemd() {
   info "Reloading systemd"
@@ -151,6 +199,7 @@ main() {
   check_prereqs
   run_tests
   deploy_files
+  deploy_overrides
   verify_units
   reload_systemd
 

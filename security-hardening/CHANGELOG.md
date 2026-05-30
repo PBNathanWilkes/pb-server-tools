@@ -4,6 +4,34 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.1.22] — 2026-05-30
+
+### Fixed
+
+- `install.sh`: on hosts listed in `NAMESPACE_OVERRIDE_HOSTS` (currently:
+  `pblinuxutility`), the installer now deploys a host-specific systemd drop-in
+  override that resets `ProtectSystem=`, `PrivateTmp=`, `ProtectKernelModules=`,
+  and `ProtectKernelTunables=`.  These directives require `CLONE_NEWNS` (mount
+  namespace support) and cause **exit 226 (EXIT_NAMESPACE)** on container/VM
+  hosts whose kernel or container runtime does not permit unprivileged mount
+  namespaces.  The source unit files are unchanged; full sandboxing is preserved
+  on PBWEBSRV03 and any other capable host.
+
+  Drop-in sources: `overrides/pblinuxutility/pb-security-hardening-check.service.d/`
+  and `overrides/pblinuxutility/pb-security-hardening-check-monthly.service.d/`.
+
+  See `overrides/pblinuxutility/README.md` and DEV-GUIDE.md §6 KFC-R02.
+
+### Files changed
+
+- `install.sh`
+- `overrides/pblinuxutility/pb-security-hardening-check.service.d/no-namespace.conf` (new)
+- `overrides/pblinuxutility/pb-security-hardening-check-monthly.service.d/no-namespace.conf` (new)
+- `overrides/pblinuxutility/README.md` (new, shared across components)
+- `CHANGELOG.md` (this file)
+
+---
+
 ## [2.1.21] — 2026-05-30
 
 ### Fixed
