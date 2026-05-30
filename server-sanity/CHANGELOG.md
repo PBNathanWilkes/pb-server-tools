@@ -4,6 +4,27 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.1] — 2026-05-30
+
+### Fixed
+
+- **Section 2 (Email DNS Monitor):** added `check_dir` calls for
+  `/var/backups/email-dns-monitor` and `/var/backups/email-dns-monitor/history`.
+  Both directories are created by the EDM installer; their absence was
+  undetected by the sanity check.
+- **Section 4 (SharePoint Export):** added `check_dir` calls for
+  `/var/lib/sharepoint-export/export` (export working subdir) and
+  `/var/backups/sharepoint-export` (archive dir). Both are created by the
+  SPE installer and were absent from the previous check.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md`
+- `CHANGELOG.md` (repo)
+
+---
+
 ## [1.0.0] — 2026-05-30
 
 ### Added

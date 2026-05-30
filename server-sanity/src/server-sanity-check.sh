@@ -307,6 +307,7 @@ EDM_INSTALL=/opt/email-dns-monitor
 EDM_BIN=/usr/local/bin/email-dns-monitor
 EDM_CONF=/etc/email-dns-monitor/email-dns-monitor.conf
 EDM_STATE=/var/lib/email-dns-monitor
+EDM_BACKUP=/var/backups/email-dns-monitor
 EDM_LOG=/var/log/email-dns-monitor
 EDM_DOMAINS_JSON=${EDM_INSTALL}/domains/domains.json
 
@@ -316,11 +317,13 @@ check_user emaildns
 check_dir  "$EDM_INSTALL"     "install root"
 check_file "$EDM_CONF"        "config"
 check_conf_syntax "$EDM_CONF"
-check_dir  "$EDM_STATE"       "state dir"
-check_dir  "$EDM_STATE/history"  "state/history"
-check_dir  "$EDM_STATE/domains"  "state/domains"
+check_dir  "$EDM_STATE"           "state dir"
+check_dir  "$EDM_STATE/history"   "state/history"
+check_dir  "$EDM_STATE/domains"   "state/domains"
 check_dir_owner "$EDM_STATE"  emaildns
-check_dir  "$EDM_LOG"         "log dir"
+check_dir  "$EDM_LOG"             "log dir"
+check_dir  "$EDM_BACKUP"          "backup dir"
+check_dir  "$EDM_BACKUP/history"  "backup/history"
 check_file "$EDM_DOMAINS_JSON" "domains/domains.json"
 
 # Validate domains.json is non-empty valid JSON
@@ -396,20 +399,24 @@ SP_INSTALL=/opt/sharepoint-export
 SP_BIN=/usr/local/bin/sharepoint-export
 SP_CONF=/etc/sharepoint-export/config
 SP_STATE=/var/lib/sharepoint-export
+SP_EXPORT_DIR=/var/lib/sharepoint-export/export
+SP_ARCHIVE_DIR=/var/backups/sharepoint-export
 SP_LOG=/var/log/sharepoint-export
 SP_LOCK_DIR=/var/lock/sharepoint-export
 
 check_binary sharepoint-export
 check_symlink_target "$SP_BIN"
 check_user sp-export
-check_dir  "$SP_INSTALL"  "install root"
-check_file "$SP_CONF"     "config"
+check_dir  "$SP_INSTALL"      "install root"
+check_file "$SP_CONF"         "config"
 check_conf_syntax "$SP_CONF"
 # Config must be 0600 owned by sp-export (install requirement)
 check_file_mode "$SP_CONF" 600 sp-export
-check_dir  "$SP_STATE"    "state dir"
-check_dir  "$SP_LOG"      "log dir"
-check_dir  "$SP_LOCK_DIR" "lock dir"
+check_dir  "$SP_STATE"        "state dir"
+check_dir  "$SP_EXPORT_DIR"   "state/export"
+check_dir  "$SP_ARCHIVE_DIR"  "backup/archive dir"
+check_dir  "$SP_LOG"          "log dir"
+check_dir  "$SP_LOCK_DIR"     "lock dir"
 check_dir_owner "$SP_STATE" sp-export
 
 check_conf_keys "$SP_CONF" \

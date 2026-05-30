@@ -4,6 +4,26 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.5] — 2026-05-30
+
+### Fixed
+
+- `server-sanity`: added missing `check_dir` calls for four directories
+  created by external application installers but not previously verified:
+  - `/var/backups/email-dns-monitor` and `/var/backups/email-dns-monitor/history`
+    (EDM backup infrastructure)
+  - `/var/lib/sharepoint-export/export` (SPE working export subdir) and
+    `/var/backups/sharepoint-export` (SPE archive dir)
+  Bumps `server-sanity` to v1.0.1.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md`
+- `CHANGELOG.md` (this file)
+
+---
+
 ## [1.0.4] — 2026-05-30
 
 ### Fixed
