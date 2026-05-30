@@ -4,6 +4,25 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.2.4] — 2026-05-30
+
+### Fixed
+
+- **`check_cert_expiry`:** `wait "$sc_pid"` returns exit 143 (SIGTERM) when
+  the background `s_client` is killed by our `kill` call.  Under
+  `set -euo pipefail` this aborted the script after the lighttpd section with
+  no cert output and a non-zero exit.  Fixed with `|| true`.  Poll iterations
+  increased from 80 to 100 (10s ceiling, matching the `timeout 15` guard with
+  headroom).
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md`
+- `CHANGELOG.md` (repo)
+
+---
+
 ## [1.2.3] — 2026-05-30
 
 ### Fixed

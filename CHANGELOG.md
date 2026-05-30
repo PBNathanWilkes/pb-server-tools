@@ -4,6 +4,22 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.12] — 2026-05-30
+
+### Fixed
+
+- `server-sanity` v1.2.4: `wait` on killed background `s_client` returned
+  exit 143, aborting the script under `set -euo pipefail`.  Fixed with
+  `|| true`.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md`
+- `CHANGELOG.md` (this file)
+
+---
+
 ## [1.0.11] — 2026-05-30
 
 ### Fixed

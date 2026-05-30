@@ -317,9 +317,9 @@ check_cert_expiry() {
     2>/dev/null > "$tmp" &
   sc_pid=$!
 
-  # Poll until the first certificate block is complete (max ~8s).
+  # Poll until the first certificate block is complete (max ~10s).
   waited=0
-  while [[ $waited -lt 80 ]]; do
+  while [[ $waited -lt 100 ]]; do
     grep -q -- '-----END CERTIFICATE-----' "$tmp" 2>/dev/null && break
     sleep 0.1
     (( waited++ )) || true
@@ -327,7 +327,7 @@ check_cert_expiry() {
 
   # Kill s_client; we have what we need.
   kill "$sc_pid" 2>/dev/null
-  wait "$sc_pid" 2>/dev/null
+  wait "$sc_pid" 2>/dev/null || true  # wait returns 143 (SIGTERM) when we kill it; suppress
 
   # Extract expiry from the first certificate block.
   enddate=$(awk '/-----BEGIN CERTIFICATE-----/{p=1} p{print} /-----END CERTIFICATE-----/{exit}' "$tmp" \
