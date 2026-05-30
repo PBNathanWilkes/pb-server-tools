@@ -4,6 +4,37 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.1.17] — 2026-05-29
+
+### Fixed
+
+- **ERR trap firing spuriously on every `[[ "$status" != "CRITICAL" ]] && status="WARN"` expression.**
+  Under `set -Eeuo pipefail`, when `$status` is already `"CRITICAL"` the `[[ ]]` test
+  exits 1 (false condition), the `&&` short-circuits without executing the assignment, and
+  `set -E` propagates the exit-1 to the ERR trap — printing a false
+  `ERROR on line N (exit 0)` for each call. This pattern appeared 7 times across
+  `check_ssh_security`, `check_kernel_security`, `check_auditd`, and
+  `check_unattended_upgrades_scope`. Fixed all 7 by appending `|| true` so the
+  compound expression always exits 0 regardless of the `[[ ]]` result.
+
+- **`check_shadow_hash_algorithm()` reported CRITICAL DES hashes for Ubuntu 24.04
+  system accounts** (`systemd-network`, `systemd-timesync`, `systemd-resolve`,
+  `polkitd`, `fwupd-refresh`). Ubuntu 24.04 locks service accounts by writing `!*`
+  in the `/etc/shadow` password field (locked-with-note convention). The previous
+  skip condition used exact matches (`"!"`, `"!!"`, `"*"`), which did not match `"!*"`.
+  Since `"!*"` does not start with `$`, it fell through to the DES branch and was
+  reported as a crackable hash. Fixed by replacing the exact-match check with a
+  prefix match: `[[ "$password" == "!"* || "$password" == "*" ]]`.
+
+### Tests
+
+- `tests/unit/test_security_hardening.sh`: added T21 and T22.
+  T21: ERR trap regression — `status=CRITICAL` is preserved and the expression
+  exits 0 under `set -Eeuo pipefail`. T22: shadow DES regression — `!*`, `!`, `!!`,
+  and `*` are all classified as SKIP (locked), not DES.
+
+---
+
 ## [2.1.16] — 2026-05-29
 
 ### Fixed

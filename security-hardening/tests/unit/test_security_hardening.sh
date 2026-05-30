@@ -414,12 +414,67 @@ EOF
                        || fail "T20 unattended-upgrades scope: expected no match, got: $result"
 }
 
+
+# ---------------------------------------------------------------------------
+# T21 — ERR trap regression: [[ status != CRITICAL ]] && status=WARN || true
+#       When status is already CRITICAL, expression must exit 0 (no ERR trap)
+# ---------------------------------------------------------------------------
+T21() {
+  local result
+  result=$(
+    set -Eeuo pipefail
+    status="CRITICAL"
+    # This is the fixed form. If it incorrectly exits 1, the subshell exits
+    # non-zero and result is empty, which we detect as a failure.
+    [[ "$status" != "CRITICAL" ]] && status="WARN" || true
+    printf '%s' "$status"
+  )
+  [[ "$result" == "CRITICAL" ]] \
+    && pass "T21 ERR trap regression: status=CRITICAL preserved, expression exits 0" \
+    || fail "T21 ERR trap regression: expected CRITICAL, got '$result' (expression triggered ERR trap or changed status)"
+}
+
+# ---------------------------------------------------------------------------
+# T22 — shadow DES false-positive regression: "!*" must be skipped
+#       Ubuntu 24.04 system accounts use "!*" in /etc/shadow
+# ---------------------------------------------------------------------------
+T22() {
+  local result
+  result=$(
+    _classify() {
+      local password="$1"
+      # Replicates the fixed skip logic from check_shadow_hash_algorithm()
+      [[ "$password" == "!"* || "$password" == "*" ]] && { printf 'SKIP'; return; }
+      [[ -z "$password" || "$password" == "x" ]]      && { printf 'SKIP'; return; }
+      if [[ "$password" != '$'* ]]; then
+        printf 'DES'
+      elif [[ "$password" == '$1$'* ]]; then
+        printf 'MD5'
+      elif [[ "$password" == '$5$'* ]]; then
+        printf 'SHA256'
+      else
+        printf 'OK'
+      fi
+    }
+    # "!*" is the Ubuntu 24.04 system-account locked-with-note form
+    r1="$(_classify '!*')"
+    r2="$(_classify '!')"
+    r3="$(_classify '!!')"
+    r4="$(_classify '*')"
+    printf '%s|%s|%s|%s' "$r1" "$r2" "$r3" "$r4"
+  )
+  [[ "$result" == "SKIP|SKIP|SKIP|SKIP" ]] \
+    && pass "T22 shadow DES regression: !*, !, !!, * all skipped (not classified as DES)" \
+    || fail "T22 shadow DES regression: expected SKIP|SKIP|SKIP|SKIP, got '$result'"
+}
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 printf '\n'
 T01; T02; T03; T04; T05; T06; T07; T08; T09
 T10; T11; T12; T13; T14; T15; T16; T17; T18; T19; T20
+T21; T22
 
 printf '\n--- Results: %d passed, %d failed ---\n' "$PASS" "$FAIL"
 if [[ $FAIL -gt 0 ]]; then

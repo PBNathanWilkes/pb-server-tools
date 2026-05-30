@@ -10,6 +10,15 @@
 # Note: Raspberry Pi OS-specific considerations are noted throughout the script
 #
 # VERSION HISTORY (for maintainers):
+# v2.1.17 - Bugfix: ERR trap fired spuriously on every [[ "$status" != "CRITICAL" ]] && status="WARN"
+#            expression. Under set -Eeuo pipefail, when $status IS "CRITICAL" the [[ ]] test exits 1
+#            (false), the && short-circuits, and set -E propagates the exit-1 to the ERR trap.
+#            Fixed all 7 occurrences by appending || true so the expression always exits 0.
+#            Bugfix: check_shadow_hash_algorithm() reported CRITICAL for Ubuntu 24.04 system
+#            accounts (systemd-network, systemd-timesync, etc.). Their /etc/shadow password field
+#            is "!*" (locked-with-note), which starts with "!" but is not exactly "!", "!!", or "*".
+#            The exact-match skip condition missed "!*" variants, sending them to the DES branch.
+#            Fixed by replacing exact matches with prefix match: [[ "$password" == "!"* || "$password" == "*" ]].
 # v2.1.16 - Improvement: SSH check uses `sshd -T` (effective config) instead of grepping
 #            sshd_config; correctly handles Include directives and drop-ins in
 #            /etc/ssh/sshd_config.d/. Fixes false-OK when PasswordAuthentication is
@@ -55,7 +64,7 @@ set -Eeuo pipefail
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
-readonly VERSION="2.1.16"
+readonly VERSION="2.1.17"
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
 readonly PATH="/usr/sbin:/usr/bin:/sbin:/bin"
@@ -346,7 +355,7 @@ check_ssh_security() {
     pwd_auth="${pwd_auth:-not-set}"
     details+="  PasswordAuthentication: $pwd_auth@@N@@"
     if [[ "$pwd_auth" == "yes" ]]; then
-        [[ "$status" != "CRITICAL" ]] && status="WARN"
+        [[ "$status" != "CRITICAL" ]] && status="WARN" || true
         issues=$((issues + 1))
         details+="  ⚠️  Password authentication is enabled (key-based recommended)@@N@@"
     elif [[ "$pwd_auth" == "no" ]]; then
@@ -372,7 +381,7 @@ check_ssh_security() {
     max_auth_tries="${max_auth_tries:-not-set}"
     details+="  MaxAuthTries: $max_auth_tries@@N@@"
     if [[ "$max_auth_tries" == "not-set" ]] || { [[ "$max_auth_tries" =~ ^[0-9]+$ ]] && [[ "$max_auth_tries" -gt 4 ]]; }; then
-        [[ "$status" != "CRITICAL" ]] && status="WARN"
+        [[ "$status" != "CRITICAL" ]] && status="WARN" || true
         issues=$((issues + 1))
         details+="  ⚠️  MaxAuthTries should be ≤4 (current: ${max_auth_tries}; default: 6)@@N@@"
         details+="    Recommendation: MaxAuthTries 4@@N@@"
@@ -393,7 +402,7 @@ check_ssh_security() {
         grace_sec=$(( ${BASH_REMATCH[1]} * 60 ))
     fi
     if [[ "$login_grace" == "not-set" ]] || [[ "$grace_sec" -gt 30 ]]; then
-        [[ "$status" != "CRITICAL" ]] && status="WARN"
+        [[ "$status" != "CRITICAL" ]] && status="WARN" || true
         issues=$((issues + 1))
         details+="  ⚠️  LoginGraceTime should be ≤30s (current: ${login_grace}; default: 120s)@@N@@"
         details+="    Recommendation: LoginGraceTime 30@@N@@"
@@ -410,7 +419,7 @@ check_ssh_security() {
     details+="  ClientAliveInterval: $alive_interval@@N@@"
     details+="  ClientAliveCountMax: $alive_count@@N@@"
     if [[ "$alive_interval" == "not-set" ]] || [[ "$alive_interval" == "0" ]]; then
-        [[ "$status" != "CRITICAL" ]] && status="WARN"
+        [[ "$status" != "CRITICAL" ]] && status="WARN" || true
         issues=$((issues + 1))
         details+="  ⚠️  Idle session termination not configured (ClientAliveInterval=0 or not set)@@N@@"
         details+="    Recommendation: ClientAliveInterval 300, ClientAliveCountMax 2@@N@@"
@@ -429,7 +438,7 @@ check_ssh_security() {
         details+="  AllowGroups: $allow_groups@@N@@"
         details+="  ✓ Login restricted to named groups@@N@@"
     else
-        [[ "$status" != "CRITICAL" ]] && status="WARN"
+        [[ "$status" != "CRITICAL" ]] && status="WARN" || true
         issues=$((issues + 1))
         details+="  ⚠️  No AllowUsers or AllowGroups set; any valid account may attempt login@@N@@"
         details+="    Recommendation: AllowGroups sudo (or restrict to specific users)@@N@@"
@@ -849,7 +858,7 @@ check_kernel_security() {
         local val
         val="$(sysctl -n "$1" 2>/dev/null || echo "unknown")"
         if [[ "$val" != "$2" ]]; then
-            [[ "$status" != "CRITICAL" ]] && status="WARN"
+            [[ "$status" != "CRITICAL" ]] && status="WARN" || true
             issues=$((issues + 1))
             details+="  ⚠️  $3 (current: ${val})@@N@@"
         fi
@@ -1215,8 +1224,13 @@ check_shadow_hash_algorithm() {
     local md5_accounts=() des_accounts=() sha256_accounts=() ok_accounts=()
 
     while IFS=: read -r username password _rest; do
-        # Skip locked/disabled accounts and system entries
-        [[ "$password" == "!" || "$password" == "*" || "$password" == "!!" ]] && continue
+        # Skip locked/disabled accounts and system entries.
+        # Ubuntu/Debian system accounts use "!" (single bang), "!!" (double bang),
+        # "*" (bare star), or "!*" / "!<hash>" (locked-with-note) in the password
+        # field.  Any password beginning with "!" is a locked account regardless of
+        # what follows; the exact-match check ("!" || "!!") missed "!*" and similar
+        # variants, causing false-positive DES CRITICAL on service accounts.
+        [[ "$password" == "!"* || "$password" == "*" ]] && continue
         [[ "$password" == "x" ]] && continue   # shadow not used
         [[ -z "$password" ]] && continue
 
@@ -1250,7 +1264,7 @@ check_shadow_hash_algorithm() {
     fi
 
     if [[ ${#sha256_accounts[@]} -gt 0 ]]; then
-        [[ "$status" != "CRITICAL" ]] && status="WARN"
+        [[ "$status" != "CRITICAL" ]] && status="WARN" || true
         issues=$((issues + 1))
         details+="  ⚠️  ${#sha256_accounts[@]} account(s) using SHA-256 (upgrade to yescrypt/SHA-512 recommended)@@N@@"
         for a in "${sha256_accounts[@]}"; do details+="    - $a@@N@@"; done
