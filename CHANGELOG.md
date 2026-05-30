@@ -4,6 +4,23 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.17] — 2026-05-30
+
+### Changed
+
+- `server-sanity` v1.3.2: applied CLI formatting and visual style to
+  `install.sh` — TTY-detected colour palette, `_ok`/`_fail`/`_head`/`_die`
+  primitives, PASS/FAIL counters, elapsed-time summary block, runtime banner,
+  inline root guard, section banners.  No functional changes.  ShellCheck clean.
+
+### Files changed
+
+- `server-sanity/install.sh`
+- `server-sanity/CHANGELOG.md`
+- `CHANGELOG.md` (this file)
+
+---
+
 ## [1.0.16] — 2026-05-30
 
 ### Changed

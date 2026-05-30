@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
+# =============================================================================
 # install.sh — Build and deploy server-sanity
 #
-# Run from the component root as:
-#   sudo bash install.sh
+# Run from the repo root as:
+#   sudo bash server-sanity/install.sh
 #
 # What it does:
 #   1. Verifies prerequisites
 #   2. Deploys server-sanity-check to /usr/local/bin/
 #   3. Deploys systemd service + timer (pb-server-sanity-check)
-#   4. Verifies deployed files match source
+#   4. Verifies deployed files match source; aborts if any differ
 #   5. Reloads systemd and enables the timer
 #   6. Runs a smoke test (syntax check)
 #
@@ -17,15 +18,14 @@
 #   /etc/systemd/system/pb-server-sanity-check.service
 #   /etc/systemd/system/pb-server-sanity-check.timer
 #
-# Usage after install:
-#   sudo server-sanity-check
-#   sudo server-sanity-check --email-on-failure
+# Exit codes:
+#   0 — all steps completed successfully
+#   1 — a step failed
+#   2 — must run as root
+# =============================================================================
 
 set -Eeuo pipefail
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 readonly SRC_DIR="${SCRIPT_DIR}/src"
@@ -42,129 +42,174 @@ readonly TIMERS=(
   pb-server-sanity-check.timer
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-info() { printf '\n[install] %s\n' "$*"; }
-ok()   { printf '  OK  %s\n' "$*"; }
-die()  { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
+# ── Colour palette ───────────────────────────────────────────────────────────
+if [[ -t 1 ]]; then
+  RED=$'\033[0;31m' GRN=$'\033[0;32m'
+  BLU=$'\033[0;34m' BOLD=$'\033[1m'   RST=$'\033[0m'
+else
+  RED='' GRN='' BLU='' BOLD='' RST=''
+fi
 
-require_root() {
-  [[ $EUID -eq 0 ]] || die "Must run as root: sudo bash install.sh"
-}
+# ── Counters ─────────────────────────────────────────────────────────────────
+_pass=0; _fail=0
 
-# ---------------------------------------------------------------------------
-# Step 1 — Prerequisites
-# ---------------------------------------------------------------------------
+# ── Primitives ───────────────────────────────────────────────────────────────
+_ok()   { printf "  %s✔%s  %s\n" "${GRN}" "${RST}" "$*"; (( ++_pass )); }
+_fail() { printf "  %s✘%s  %s\n" "${RED}" "${RST}" "$*"; (( ++_fail )); }
+_head() { printf "\n%s%s══ %s%s\n" "${BOLD}" "${BLU}" "$*" "${RST}"; }
+_die()  { printf "\n%s%sERROR:%s %s\n" "${BOLD}" "${RED}" "${RST}" "$*" >&2; exit 1; }
+
+# ── Guards ───────────────────────────────────────────────────────────────────
+if [[ $EUID -ne 0 ]]; then
+  printf "${RED}Error:${RST} must run as root — use: sudo bash %s\n" "$0" >&2
+  exit 2
+fi
+
+_START=$(date +%s%N)
+
+printf '%s%s — server-sanity Installer%s\n' "${BOLD}" "$(hostname -s)" "${RST}"
+printf '%s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+
+# =============================================================================
+# ── STEP 1: Prerequisites ────────────────────────────────────────────────────
+# =============================================================================
+
 check_prereqs() {
-  info "Checking prerequisites"
+  _head "Prerequisites"
 
-  command -v jq        >/dev/null 2>&1 || die "jq not found — sudo apt install jq"
-  command -v systemctl >/dev/null 2>&1 || die "systemctl not found — systemd required"
-  command -v msmtp     >/dev/null 2>&1 || die "msmtp not found — sudo apt install msmtp"
+  command -v jq        >/dev/null 2>&1 || _die "jq not found — sudo apt install jq"
+  command -v systemctl >/dev/null 2>&1 || _die "systemctl not found — systemd required"
+  command -v msmtp     >/dev/null 2>&1 || _die "msmtp not found — sudo apt install msmtp"
 
   [[ -f "${SRC_DIR}/server-sanity-check.sh" ]] \
-    || die "Source file not found: ${SRC_DIR}/server-sanity-check.sh"
+    || _die "source file not found: ${SRC_DIR}/server-sanity-check.sh"
 
+  local unit
   for unit in "${SERVICES[@]}"; do
     [[ -f "${SYSTEMD_SRC}/${unit}" ]] \
-      || die "Systemd unit not found: ${SYSTEMD_SRC}/${unit}"
+      || _die "systemd unit not found: ${SYSTEMD_SRC}/${unit}"
   done
 
-  ok "all prerequisites present"
+  _ok "all prerequisites present"
 }
 
-# ---------------------------------------------------------------------------
-# Step 2 — Deploy script
-# ---------------------------------------------------------------------------
+# =============================================================================
+# ── STEP 2: Deploy script ────────────────────────────────────────────────────
+# =============================================================================
+
 deploy_script() {
-  info "Deploying script"
+  _head "Deploy script"
 
   install -m 0755 -o root -g root \
     "${SRC_DIR}/server-sanity-check.sh" \
     "${DEST}"
-  ok "${DEST}"
+  _ok "${DEST}"
 }
 
-# ---------------------------------------------------------------------------
-# Step 3 — Deploy systemd units
-# ---------------------------------------------------------------------------
+# =============================================================================
+# ── STEP 3: Deploy systemd units ─────────────────────────────────────────────
+# =============================================================================
+
 deploy_units() {
-  info "Deploying systemd units"
+  _head "Deploy systemd units"
 
   local unit
   for unit in "${SERVICES[@]}"; do
     install -m 0644 -o root -g root \
       "${SYSTEMD_SRC}/${unit}" \
       "${SYSTEMD_DEST}/${unit}"
-    ok "${SYSTEMD_DEST}/${unit}"
+    _ok "${SYSTEMD_DEST}/${unit}"
   done
 }
 
-# ---------------------------------------------------------------------------
-# Step 4 — Verify deployed files match source
-# ---------------------------------------------------------------------------
+# =============================================================================
+# ── STEP 4: Verify deployed files ────────────────────────────────────────────
+# =============================================================================
+#
+# Guards against a deploy that silently wrote to the wrong path or left a
+# stale file in place.  Aborts before daemon-reload if anything differs.
+
 verify_files() {
-  info "Verifying deployed files match source"
+  _head "Verify deployed files"
 
-  # Script
-  diff -q "${SRC_DIR}/server-sanity-check.sh" "${DEST}" >/dev/null 2>&1 \
-    || die "Deployed script differs from source: ${DEST}"
-  ok "${DEST}"
+  local mismatches=0
 
-  # Units
+  if ! diff -q "${SRC_DIR}/server-sanity-check.sh" "${DEST}" >/dev/null 2>&1; then
+    _fail "${DEST} — differs from source"
+    (( mismatches++ )) || true
+  else
+    _ok "${DEST}"
+  fi
+
   local unit
   for unit in "${SERVICES[@]}"; do
-    diff -q "${SYSTEMD_SRC}/${unit}" "${SYSTEMD_DEST}/${unit}" >/dev/null 2>&1 \
-      || die "Deployed unit differs from source: ${SYSTEMD_DEST}/${unit}"
-    ok "${SYSTEMD_DEST}/${unit}"
+    if ! diff -q "${SYSTEMD_SRC}/${unit}" "${SYSTEMD_DEST}/${unit}" >/dev/null 2>&1; then
+      _fail "${SYSTEMD_DEST}/${unit} — differs from source"
+      (( mismatches++ )) || true
+    else
+      _ok "${SYSTEMD_DEST}/${unit}"
+    fi
   done
+
+  [[ $mismatches -eq 0 ]] || _die "file verification failed (${mismatches} file(s) differ) — aborting"
 }
 
-# ---------------------------------------------------------------------------
-# Step 5 — Reload systemd and enable timer
-# ---------------------------------------------------------------------------
+# =============================================================================
+# ── STEP 5: Reload systemd ───────────────────────────────────────────────────
+# =============================================================================
+
 reload_systemd() {
-  info "Reloading systemd"
+  _head "Reload systemd"
+
   systemctl daemon-reload
-  ok "daemon-reload"
+  _ok "daemon-reload"
 
   local timer
   for timer in "${TIMERS[@]}"; do
     systemctl enable --now "$timer"
-    ok "enabled + started ${timer}"
+    _ok "enabled + started ${timer}"
   done
 }
 
-# ---------------------------------------------------------------------------
-# Step 6 — Smoke test
-# ---------------------------------------------------------------------------
+# =============================================================================
+# ── STEP 6: Smoke test ───────────────────────────────────────────────────────
+# =============================================================================
+
 smoke_test() {
-  info "Smoke test"
+  _head "Smoke test"
 
-  bash -n "${DEST}" \
-    || die "Deployed script failed syntax check: ${DEST}"
-  ok "syntax check passed: ${DEST}"
+  bash -n "${DEST}" || _die "deployed script failed syntax check: ${DEST}"
+  _ok "syntax check passed: ${DEST}"
 }
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-main() {
-  require_root
-  check_prereqs
-  deploy_script
-  deploy_units
-  verify_files
-  reload_systemd
-  smoke_test
+# =============================================================================
+# ── Main ─────────────────────────────────────────────────────────────────────
+# =============================================================================
 
-  printf '\n[install] Deployment complete.\n'
-  printf '\nUsage:\n'
-  printf '  sudo server-sanity-check\n'
-  printf '  sudo server-sanity-check --email-on-failure\n\n'
-  printf 'Scheduled watchdog:\n'
-  printf '  systemctl status pb-server-sanity-check.timer\n\n'
-}
+check_prereqs
+deploy_script
+deploy_units
+verify_files
+reload_systemd
+smoke_test
 
-main "$@"
+# ── Summary ──────────────────────────────────────────────────────────────────
+_END=$(date +%s%N)
+_ELAPSED=$(( (_END - _START) / 1000000 ))
+
+printf '\n%s══ Summary%s\n' "${BOLD}" "${RST}"
+printf '  %sPASS: %d%s   %sFAIL: %d%s   (elapsed: %dms)\n\n' \
+  "${GRN}" "$_pass" "${RST}" "${RED}" "$_fail" "${RST}" "$_ELAPSED"
+
+if (( _fail > 0 )); then
+  printf '%s%sINSTALL FAILED — %d step(s) failed%s\n\n' "${RED}" "${BOLD}" "$_fail" "${RST}"
+  exit 1
+fi
+
+printf '%s%sDEPLOYMENT COMPLETE%s\n\n' "${GRN}" "${BOLD}" "${RST}"
+
+printf 'Usage:\n'
+printf '  sudo server-sanity-check\n'
+printf '  sudo server-sanity-check --email-on-failure\n\n'
+printf 'Scheduled watchdog:\n'
+printf '  systemctl status pb-server-sanity-check.timer\n\n'

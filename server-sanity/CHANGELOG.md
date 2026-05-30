@@ -4,6 +4,24 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.2] — 2026-05-30
+
+### Changed
+
+- `install.sh`: applied CLI formatting and visual style — TTY-detected colour
+  palette, `_ok`/`_fail`/`_head`/`_die` primitives with `✔`/`✘`/`══` chrome,
+  PASS/FAIL counters, elapsed-time summary block, runtime banner, inline root
+  guard, section banners on each step.  `verify_files` failures now route
+  through `_fail` so they appear in the counter.  Post-install usage block
+  unchanged.  ShellCheck clean.
+
+### Files changed
+
+- `server-sanity/install.sh`
+- `server-sanity/CHANGELOG.md` (this file)
+
+---
+
 ## [1.3.1] — 2026-05-30
 
 ### Fixed
