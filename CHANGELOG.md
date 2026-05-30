@@ -4,6 +4,21 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.14] — 2026-05-30
+
+### Fixed
+
+- `server-sanity` v1.3.1: lighttpd section now guarded by `command -v
+  lighttpd`; emits `⊘` skip on hosts without it instead of 4 failures.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md`
+- `CHANGELOG.md` (this file)
+
+---
+
 ## [1.0.13] — 2026-05-30
 
 ### Changed

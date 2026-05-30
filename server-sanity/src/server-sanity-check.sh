@@ -27,11 +27,11 @@
 #   • Balena Monitor     (/opt/balena-monitor)      — skipped if not installed
 #   • SharePoint Export  (/opt/sharepoint-export)  — skipped if not installed
 #   • Server Tools       (/usr/local/libexec/pb-maintenance)
-#   • lighttpd                                      — always checked
+#   • lighttpd                                      — skipped if not installed
 #
-# Optional sections (2–4) are guarded by their /opt install root: if the
-# directory is absent the section prints "not installed" and no counters
-# are incremented.
+# Optional sections (2–4, 6) are guarded: sections 2–4 by their /opt install
+# root; section 6 (lighttpd) by binary presence.  If the sentinel is absent
+# the section prints "not installed" and no counters are incremented.
 # =============================================================================
 
 set -euo pipefail
@@ -608,51 +608,55 @@ check_last_run pb-security-hardening-check.service
 # =============================================================================
 _head "lighttpd"
 
-LIGHTTPD_CONF=/etc/lighttpd/lighttpd.conf
-LIGHTTPD_LOG=/var/log/lighttpd
+if command -v lighttpd >/dev/null 2>&1; then
 
-check_binary lighttpd
+  LIGHTTPD_CONF=/etc/lighttpd/lighttpd.conf
+  LIGHTTPD_LOG=/var/log/lighttpd
 
-# Service state
-_lighty_state=$(systemctl is-active lighttpd 2>/dev/null || echo "inactive")
-if [[ $_lighty_state == "active" ]]; then
-  _ok  "service: lighttpd  (active)"
+  check_binary lighttpd
+
+  # Service state
+  _lighty_state=$(systemctl is-active lighttpd 2>/dev/null || echo "inactive")
+  if [[ $_lighty_state == "active" ]]; then
+    _ok  "service: lighttpd  (active)"
+  else
+    _fail "service: lighttpd  (state: ${_lighty_state})"
+  fi
+
+  # Config syntax
+  check_file "$LIGHTTPD_CONF" "/etc/lighttpd/lighttpd.conf"
+  if [[ -f $LIGHTTPD_CONF ]]; then
+    if lighttpd -t -f "$LIGHTTPD_CONF" >/dev/null 2>&1; then
+      _ok  "config syntax OK: lighttpd.conf"
+    else
+      _fail "config syntax error: lighttpd.conf"
+    fi
+  fi
+
+  check_dir "$LIGHTTPD_LOG" "/var/log/lighttpd"
+
+  # TLS certificate expiry — read all ssl.pemfile paths from the live config,
+  # deduplicate, and check each one directly from disk.  No network required.
+  if [[ -f $LIGHTTPD_CONF ]]; then
+    # Extract quoted pemfile paths; label is the Let's Encrypt domain dir name.
+    mapfile -t _pem_files < <(
+      sed -nE 's/^[[:space:]]*ssl\.pemfile[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' \
+        "$LIGHTTPD_CONF" \
+      | sort -u
+    )
+
+    if [[ ${#_pem_files[@]} -eq 0 ]]; then
+      _warn "cert expiry: no ssl.pemfile entries found in ${LIGHTTPD_CONF}"
+    else
+      for _pem in "${_pem_files[@]}"; do
+        _label=$(basename "$(dirname "$_pem")")
+        check_cert_expiry_file "$_pem" "$_label"
+      done
+    fi
+  fi
+
 else
-  _fail "service: lighttpd  (state: ${_lighty_state})"
-fi
-
-# Config syntax
-check_file "$LIGHTTPD_CONF" "/etc/lighttpd/lighttpd.conf"
-if [[ -f $LIGHTTPD_CONF ]]; then
-  if lighttpd -t -f "$LIGHTTPD_CONF" >/dev/null 2>&1; then
-    _ok  "config syntax OK: lighttpd.conf"
-  else
-    _fail "config syntax error: lighttpd.conf"
-  fi
-fi
-
-check_dir "$LIGHTTPD_LOG" "/var/log/lighttpd"
-
-# TLS certificate expiry — read all ssl.pemfile paths from the live config,
-# deduplicate, and check each one directly from disk.  No network required.
-if [[ -f $LIGHTTPD_CONF ]]; then
-  # Extract quoted pemfile paths from the live config only (not _archive/).
-  # sed: strip leading whitespace, match ssl.pemfile = "...", capture the path.
-  mapfile -t _pem_files < <(
-    sed -nE 's/^[[:space:]]*ssl\.pemfile[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' \
-      "$LIGHTTPD_CONF" \
-    | sort -u
-  )
-
-  if [[ ${#_pem_files[@]} -eq 0 ]]; then
-    _warn "cert expiry: no ssl.pemfile entries found in ${LIGHTTPD_CONF}"
-  else
-    for _pem in "${_pem_files[@]}"; do
-      # Use the domain directory name as the label (cleaner than full path).
-      _label=$(basename "$(dirname "$_pem")")
-      check_cert_expiry_file "$_pem" "$_label"
-    done
-  fi
+  _skip "lighttpd not installed on this host"
 fi
 
 

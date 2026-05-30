@@ -4,6 +4,22 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.1] — 2026-05-30
+
+### Fixed
+
+- **lighttpd section:** added `command -v lighttpd` guard — section now
+  prints `⊘ not installed` and increments no counters on hosts without
+  lighttpd (e.g. pblinuxutility).  Previously emitted 4 failures.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md`
+- `CHANGELOG.md` (repo)
+
+---
+
 ## [1.3.0] — 2026-05-30
 
 ### Changed
