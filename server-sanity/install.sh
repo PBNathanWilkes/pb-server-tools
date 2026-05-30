@@ -26,8 +26,8 @@ set -Eeuo pipefail
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-readonly SCRIPT_DIR
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR
 readonly SRC_DIR="${SCRIPT_DIR}/src"
 readonly SYSTEMD_SRC="${SCRIPT_DIR}/systemd"
 readonly BIN_DIR="/usr/local/bin"
