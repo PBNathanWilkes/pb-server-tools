@@ -7,7 +7,7 @@
 # Must run as root (sudo).
 #
 # Usage:
-#   sudo server-sanity-check [--email-on-failure]
+#   sudo server-sanity-check [--email-on-failure] [--quiet] [--verbose]
 #
 # Options:
 #   --email-on-failure
@@ -15,6 +15,12 @@
 #       full report to EMAIL_PRIMARY sourced from /etc/balena-monitor/config.
 #       Warnings (exit 0) do not trigger an email.  Intended for automated
 #       scheduled runs; see pb-server-sanity-check.timer.
+#   --quiet
+#       Suppress pass lines; show only failures, warnings, and the summary.
+#       Useful when capturing output to a log file or reviewing after the run.
+#   --verbose
+#       Show per-section elapsed time and annotate each _run call with the
+#       underlying command.  Useful for diagnosing slow or failing steps.
 #
 # Exit codes:
 #   0 — all checks passed (warnings are acceptable)
@@ -38,10 +44,14 @@ set -euo pipefail
 
 # ── Argument parsing ─────────────────────────────────────────────────────────
 _EMAIL_ON_FAILURE=0
+_QUIET=0
+_VERBOSE=0
 
 for _arg in "$@"; do
   case "$_arg" in
     --email-on-failure) _EMAIL_ON_FAILURE=1 ;;
+    --quiet)            _QUIET=1 ;;
+    --verbose)          _VERBOSE=1 ;;
     --help|-h)
       sed -n '/^# Usage:/,/^# Applications checked:/p' "$0" | sed 's/^# \?//'
       exit 0
@@ -56,13 +66,17 @@ done
 # ── Colour palette ──────────────────────────────────────────────────────────
 if [[ -t 1 ]]; then
   RED=$'\033[0;31m' GRN=$'\033[0;32m' YLW=$'\033[0;33m'
-  BLU=$'\033[0;34m' BOLD=$'\033[1m'   RST=$'\033[0m'
+  BLU=$'\033[0;34m' DIM=$'\033[2m'    BOLD=$'\033[1m' RST=$'\033[0m'
 else
-  RED='' GRN='' YLW='' BLU='' BOLD='' RST=''
+  RED='' GRN='' YLW='' BLU='' DIM='' BOLD='' RST=''
 fi
 
-# ── Counters ─────────────────────────────────────────────────────────────────
+# ── Counters and accumulators ─────────────────────────────────────────────────
 _pass=0; _fail=0; _warn=0
+_FAILURES=(); _WARNINGS=()
+
+# ── Section timing ────────────────────────────────────────────────────────────
+_SECTION_START=0
 
 # ── Output capture for --email-on-failure ────────────────────────────────────
 # When the flag is set we tee all stdout to a temp file so the email body
@@ -76,10 +90,35 @@ if (( _EMAIL_ON_FAILURE )); then
 fi
 
 # ── Primitives ───────────────────────────────────────────────────────────────
-_ok()   { printf "  %s✔%s  %s\n" "${GRN}" "${RST}" "$*"; (( ++_pass )); }
-_fail() { printf "  %s✘%s  %s\n" "${RED}" "${RST}" "$*"; (( ++_fail )); }
-_warn() { printf "  %s⚠%s  %s\n" "${YLW}" "${RST}" "$*"; (( ++_warn )); }
-_head() { printf "\n%s%s══ %s%s\n" "${BOLD}" "${BLU}" "$*" "${RST}"; }
+_ok()   {
+  (( ++_pass ))
+  (( _QUIET )) && return
+  printf "  %s✔%s  %s\n" "${GRN}" "${RST}" "$*"
+}
+_fail() {
+  (( ++_fail )) || true
+  _FAILURES+=("$*")
+  printf "  %s✘%s  %s\n" "${RED}" "${RST}" "$*"
+}
+_warn() {
+  (( ++_warn )) || true
+  _WARNINGS+=("$*")
+  printf "  %s⚠%s  %s\n" "${YLW}" "${RST}" "$*"
+}
+# _note <text>  — plain indented annotation; attach below _fail or _warn lines.
+# No glyph, no counter.
+_note() { printf "     %s%s%s\n" "${DIM}" "$*" "${RST}"; }
+_head() {
+  local now elapsed_str=''
+  now=$(date +%s%N)
+  if (( _VERBOSE && _SECTION_START > 0 )); then
+    local ms=$(( (now - _SECTION_START) / 1000000 ))
+    elapsed_str="  ${DIM}(${ms}ms)${RST}"
+  fi
+  _SECTION_START=$now
+  printf "\n%s%s══ %s%s%s\n" "${BOLD}" "${BLU}" "$*" "${RST}" "${elapsed_str}"
+}
+_skip() { printf "  ⊘  %s\n" "$*"; }
 
 # ── Guards ───────────────────────────────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
@@ -91,6 +130,8 @@ _START=$(date +%s%N)
 
 printf '%s%s — Infrastructure Sanity Check%s\n' "${BOLD}" "$(hostname -s)" "${RST}"
 printf '%s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+(( _QUIET   )) && printf '%s[quiet mode — pass lines suppressed]%s\n'      "${DIM}" "${RST}"
+(( _VERBOSE )) && printf '%s[verbose mode — section timings shown]%s\n'    "${DIM}" "${RST}"
 
 # =============================================================================
 # Helper functions
@@ -149,6 +190,7 @@ check_file_mode() {
     _ok  "permissions: $path  (${mode} ${owner})"
   else
     _fail "permissions: $path  (expected ${mode}/${owner}, got ${actual_mode}/${actual_owner})"
+    _note "Fix: chmod ${mode} ${path} && chown ${owner} ${path}"
   fi
 }
 
@@ -234,6 +276,7 @@ check_timer() {
     _ok "timer:   $unit  (next: $next_str)"
   else
     _fail "timer not active: $unit  (state: $state)"
+    _note "Fix: sudo systemctl enable --now ${unit}"
   fi
 }
 
@@ -270,8 +313,6 @@ check_last_run() {
 }
 
 # check_no_lockfile <path>
-_skip() { printf "  ⊘  %s\n" "$*"; }
-
 check_no_lockfile() {
   local lf=$1
   if [[ -f $lf ]]; then
@@ -669,6 +710,21 @@ _ELAPSED=$(( (_END - _START) / 1000000 ))
 printf '\n%s══ Summary%s\n' "${BOLD}" "${RST}"
 printf '  %sPASS: %d%s   %sFAIL: %d%s   %sWARN: %d%s   (elapsed: %dms)\n\n' \
   "${GRN}" "$_pass" "${RST}" "${RED}" "$_fail" "${RST}" "${YLW}" "$_warn" "${RST}" "$_ELAPSED"
+
+if (( ${#_FAILURES[@]} > 0 )); then
+  printf '%s%sFailed checks:%s\n' "${BOLD}" "${RED}" "${RST}"
+  for _f in "${_FAILURES[@]}"; do
+    printf "  %s✘%s  %s\n" "${RED}" "${RST}" "${_f}"
+  done
+  printf '\n'
+fi
+if (( ${#_WARNINGS[@]} > 0 )); then
+  printf '%s%sWarnings:%s\n' "${BOLD}" "${YLW}" "${RST}"
+  for _w in "${_WARNINGS[@]}"; do
+    printf "  %s⚠%s  %s\n" "${YLW}" "${RST}" "${_w}"
+  done
+  printf '\n'
+fi
 
 if (( _fail > 0 )); then
   printf '%s%sNOT OK — %d check(s) failed%s\n\n' "${RED}" "${BOLD}" "$_fail" "${RST}"

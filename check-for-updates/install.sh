@@ -3,7 +3,7 @@
 # install.sh — Build, test, and deploy check-for-updates
 #
 # Run from the repo root as:
-#   sudo bash check-for-updates/install.sh
+#   sudo bash check-for-updates/install.sh [--dry-run] [--quiet] [--verbose]
 #
 # What it does:
 #   1. Verifies prerequisites (jq, python3-apt, python3-pytest)
@@ -13,6 +13,12 @@
 #   5. Deploys host-specific drop-in overrides (no-namespace on restricted hosts)
 #   6. Verifies deployed systemd units match source; aborts if any differ
 #   7. Reloads systemd and re-enables timers
+#
+# Options:
+#   --dry-run   Print what would be done; mutate nothing
+#   --quiet     Suppress pass lines; show failures, warnings, summary
+#   --verbose   Show commands and per-section elapsed time
+#   --help, -h  Show this help
 #
 # Production layout:
 #   /usr/local/libexec/pb-maintenance/   check-for-updates.sh (0750 root:root)
@@ -50,15 +56,7 @@ readonly TIMERS=(
   pb-check-for-updates-monthly.timer
 )
 
-# Hosts that cannot honour CLONE_NEWNS (mount namespace) sandbox directives.
-# The installer deploys a drop-in override for each listed host that resets
-# the offending directives.  Source unit files are never modified.
-# See overrides/<hostname>/README.md and DEV-GUIDE.md §6 KFC-R02.
-readonly NAMESPACE_OVERRIDE_HOSTS=(
-  pblinuxutility
-)
-# Service units (not timers) that receive the no-namespace drop-in on
-# restricted hosts.
+readonly NAMESPACE_OVERRIDE_HOSTS=(pblinuxutility)
 readonly NAMESPACE_OVERRIDE_SERVICES=(
   pb-check-for-updates.service
   pb-check-for-updates-monthly.service
@@ -66,20 +64,80 @@ readonly NAMESPACE_OVERRIDE_SERVICES=(
 
 # ── Colour palette ───────────────────────────────────────────────────────────
 if [[ -t 1 ]]; then
-  RED=$'\033[0;31m' GRN=$'\033[0;32m'
-  BLU=$'\033[0;34m' BOLD=$'\033[1m'   RST=$'\033[0m'
+  RED=$'\033[0;31m' GRN=$'\033[0;32m' YLW=$'\033[0;33m'
+  BLU=$'\033[0;34m' DIM=$'\033[2m'    BOLD=$'\033[1m' RST=$'\033[0m'
 else
-  RED='' GRN='' BLU='' BOLD='' RST=''
+  RED='' GRN='' YLW='' BLU='' DIM='' BOLD='' RST=''
 fi
 
-# ── Counters ─────────────────────────────────────────────────────────────────
-_pass=0; _fail=0
+# ── Counters and accumulators ─────────────────────────────────────────────────
+_pass=0; _fail=0; _warn=0
+_FAILURES=(); _WARNINGS=()
+
+# ── Mode flags ────────────────────────────────────────────────────────────────
+_QUIET=0; _VERBOSE=0; _DRY_RUN=0
+
+# ── Section timing ────────────────────────────────────────────────────────────
+_SECTION_START=0
 
 # ── Primitives ───────────────────────────────────────────────────────────────
-_ok()   { printf "  %s✔%s  %s\n" "${GRN}" "${RST}" "$*"; (( ++_pass )); }
-_fail() { printf "  %s✘%s  %s\n" "${RED}" "${RST}" "$*"; (( ++_fail )); }
-_head() { printf "\n%s%s══ %s%s\n" "${BOLD}" "${BLU}" "$*" "${RST}"; }
-_die()  { printf "\n%s%sERROR:%s %s\n" "${BOLD}" "${RED}" "${RST}" "$*" >&2; exit 1; }
+_ok()   {
+  (( ++_pass ))
+  (( _QUIET )) && return
+  printf "  %s✔%s  %s\n" "${GRN}" "${RST}" "$*"
+}
+_fail() {
+  (( ++_fail )) || true
+  _FAILURES+=("$*")
+  printf "  %s✘%s  %s\n" "${RED}" "${RST}" "$*"
+}
+_warn() {
+  (( ++_warn )) || true
+  _WARNINGS+=("$*")
+  printf "  %s⚠%s  %s\n" "${YLW}" "${RST}" "$*"
+}
+_note() { printf "     %s%s%s\n" "${DIM}" "$*" "${RST}"; }
+_head() {
+  local now elapsed_str=''
+  now=$(date +%s%N)
+  if (( _VERBOSE && _SECTION_START > 0 )); then
+    local ms=$(( (now - _SECTION_START) / 1000000 ))
+    elapsed_str="  ${DIM}(${ms}ms)${RST}"
+  fi
+  _SECTION_START=$now
+  printf "\n%s%s══ %s%s%s\n" "${BOLD}" "${BLU}" "$*" "${RST}" "${elapsed_str}"
+}
+_run() {
+  local label="$1"; shift
+  local t0 t1 ms rc=0
+  printf "  %s·%s  %s\n" "${DIM}" "${RST}" "${label}"
+  if (( _VERBOSE )); then
+    printf "     %s%s%s\n" "${DIM}" "$*" "${RST}"
+  fi
+  if (( _DRY_RUN )); then
+    printf "     %s[dry-run] %s%s\n" "${DIM}" "$*" "${RST}"
+    _ok "${label}"
+    return 0
+  fi
+  t0=$(date +%s%N)
+  "$@" || rc=$?
+  t1=$(date +%s%N)
+  ms=$(( (t1 - t0) / 1000000 ))
+  if (( rc == 0 )); then
+    _ok "${label}  (${ms}ms)"
+  else
+    _fail "${label}  (exit ${rc})"
+  fi
+  return $rc
+}
+_die() {
+  local msg="$1" hint="${2:-}"
+  printf "\n%s%sERROR:%s %s\n" "${BOLD}" "${RED}" "${RST}" "${msg}" >&2
+  if [[ -n "${hint}" ]]; then
+    printf "     %s%s%s\n" "${DIM}" "${hint}" "${RST}" >&2
+  fi
+  exit 1
+}
 
 # ── Guards ───────────────────────────────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
@@ -87,25 +145,48 @@ if [[ $EUID -ne 0 ]]; then
   exit 2
 fi
 
+# ── Argument parsing ─────────────────────────────────────────────────────────
+for _arg in "$@"; do
+  case "$_arg" in
+    --help|-h)
+      sed -n '/^# Run from/,/^# Production layout/p' "$0" | sed 's/^# \?//'
+      exit 0
+      ;;
+  esac
+done
+
+set -- "$@"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run)  _DRY_RUN=1; shift ;;
+    --quiet)    _QUIET=1;   shift ;;
+    --verbose)  _VERBOSE=1; shift ;;
+    --help|-h)  exit 0 ;;
+    *)          _die "Unknown option: $1" "Usage: sudo bash $0 [--dry-run] [--quiet] [--verbose]" ;;
+  esac
+done
+
 _START=$(date +%s%N)
 
 printf '%s%s — check-for-updates Installer%s\n' "${BOLD}" "$(hostname -s)" "${RST}"
 printf '%s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+(( _DRY_RUN )) && printf '%s[dry-run mode — no changes will be made]%s\n' "${YLW}" "${RST}"
+(( _QUIET   )) && printf '%s[quiet mode — pass lines suppressed]%s\n'      "${DIM}" "${RST}"
+(( _VERBOSE )) && printf '%s[verbose mode — commands and section timings shown]%s\n' "${DIM}" "${RST}"
 
 # =============================================================================
 # ── STEP 1: Prerequisites ────────────────────────────────────────────────────
 # =============================================================================
-#
-# python3 -B suppresses bytecode compilation so the import checks do not
-# create root-owned __pycache__ directories inside the source tree.
 
 check_prereqs() {
   _head "Prerequisites"
 
-  command -v jq      >/dev/null 2>&1 || _die "jq not found — sudo apt install jq"
-  command -v python3 >/dev/null 2>&1 || _die "python3 not found"
-  python3 -B -c "import apt_pkg" 2>/dev/null || _die "python3-apt not found — sudo apt install python3-apt"
-  python3 -B -c "import pytest"  2>/dev/null || _die "pytest not found — sudo apt install python3-pytest"
+  command -v jq      >/dev/null 2>&1 || _die "jq not found"      "Fix: sudo apt install jq"
+  command -v python3 >/dev/null 2>&1 || _die "python3 not found" "Fix: sudo apt install python3"
+  python3 -B -c "import apt_pkg" 2>/dev/null \
+    || _die "python3-apt not found" "Fix: sudo apt install python3-apt"
+  python3 -B -c "import pytest"  2>/dev/null \
+    || _die "pytest not found"      "Fix: sudo apt install python3-pytest"
 
   _ok "jq, python3-apt, python3-pytest present"
 }
@@ -113,9 +194,6 @@ check_prereqs() {
 # =============================================================================
 # ── STEP 2: Unit tests ───────────────────────────────────────────────────────
 # =============================================================================
-#
-# Run as the invoking user via sudo -u so that tests which assert non-root
-# behaviour work correctly.
 
 run_tests() {
   _head "Unit tests"
@@ -123,85 +201,73 @@ run_tests() {
   local test_user="${SUDO_USER:-$(id -un)}"
 
   # _run_pytest <label> <test_file>
-  # Captures pytest -v output; re-emits each PASSED/FAILED line through
-  # _ok/_fail so individual results appear as indented checkmarks in the
-  # structured outline.  The raw progress output (percentages) is suppressed.
-  # Aborts deployment on any test failure.
   _run_pytest() {
     local label="$1" test_file="$2"
-    printf '  running %s\n' "$label"
+    printf '  %s·%s  running %s\n' "${DIM}" "${RST}" "${label}"
+    if (( _VERBOSE )); then
+      printf "     %spython3 -m pytest %s -v%s\n" "${DIM}" "${test_file}" "${RST}"
+    fi
     local raw exit_code=0
     raw="$(sudo -u "$test_user" python3 -m pytest "$test_file" -v 2>&1)" || exit_code=$?
     local line
     while IFS= read -r line; do
-      # Per-test result lines: "path::Class::test_name PASSED [ N%]"
       if [[ "$line" =~ ::([^[:space:]]+)[[:space:]]+(PASSED|FAILED) ]]; then
         local name="${BASH_REMATCH[1]}" result="${BASH_REMATCH[2]}"
-        if [[ "$result" == "PASSED" ]]; then
-          _ok "$name"
-        else
-          _fail "$name"
-        fi
+        if [[ "$result" == "PASSED" ]]; then _ok "$name"; else _fail "$name"; fi
       fi
     done <<<"$raw"
     if (( exit_code != 0 )); then
-      # Print the failure detail lines from pytest for diagnosis
       while IFS= read -r line; do
-        [[ "$line" =~ ^FAILED[[:space:]] ]] && printf '       %s\n' "$line"
+        [[ "$line" =~ ^FAILED[[:space:]] ]] && _note "$line"
       done <<<"$raw"
-      _die "${label} failed — aborting deployment"
+      _die "${label} failed — aborting deployment" \
+           "Re-run: sudo bash ${SCRIPT_DIR}/install.sh --only check-for-updates"
     fi
   }
 
   # _run_bash_tests <label> <test_script>
-  # Captures bash test harness output (PASS/FAIL per line, --- Results --- footer);
-  # re-emits each case through _ok/_fail.  Aborts deployment on any test failure.
   _run_bash_tests() {
     local label="$1" test_script="$2"
-    printf '  running %s\n' "$label"
+    printf '  %s·%s  running %s\n' "${DIM}" "${RST}" "${label}"
+    if (( _VERBOSE )); then
+      printf "     %sbash %s%s\n" "${DIM}" "${test_script}" "${RST}"
+    fi
     local raw exit_code=0
     raw="$(sudo -u "$test_user" bash "$test_script" 2>&1)" || exit_code=$?
     local line
     while IFS= read -r line; do
-      # Harness lines: "  PASS T01_name" or "  FAIL T01_name"
       if [[ "$line" =~ ^[[:space:]]+(PASS|FAIL)[[:space:]]+(.+)$ ]]; then
         local result="${BASH_REMATCH[1]}" name="${BASH_REMATCH[2]}"
-        if [[ "$result" == "PASS" ]]; then
-          _ok "$name"
-        else
-          _fail "$name"
-          # Print any detail lines that follow a FAIL (indented by the harness)
-        fi
-      # Detail lines under a FAIL: "       got  = ..."
+        if [[ "$result" == "PASS" ]]; then _ok "$name"; else _fail "$name"; fi
       elif [[ "$line" =~ ^[[:space:]]{6,} ]]; then
-        printf '  %s\n' "${line#"${line%%[![:space:]]*}"}"
+        _note "${line#"${line%%[![:space:]]*}"}"
       fi
     done <<<"$raw"
     if (( exit_code != 0 )); then
-      _die "${label} failed — aborting deployment"
+      _die "${label} failed — aborting deployment" \
+           "Re-run: sudo bash ${SCRIPT_DIR}/install.sh --only check-for-updates"
     fi
   }
 
-  _run_pytest      "test_pb_apt_evaluator.py"    "${TESTS_DIR}/test_pb_apt_evaluator.py"
-  _run_bash_tests  "test_pb_patch_reporter.sh"   "${TESTS_DIR}/test_pb_patch_reporter.sh"
+  _run_pytest     "test_pb_apt_evaluator.py"   "${TESTS_DIR}/test_pb_apt_evaluator.py"
+  _run_bash_tests "test_pb_patch_reporter.sh"  "${TESTS_DIR}/test_pb_patch_reporter.sh"
 }
 
 # =============================================================================
 # ── STEP 3: Clean bytecode artefacts ─────────────────────────────────────────
 # =============================================================================
-#
-# Python bytecode caches (__pycache__) may be written during import checks or
-# pytest runs.  .pytest_cache is written by pytest into tests/unit/.  Both are
-# removed unconditionally so the source tree is clean after every install run
-# regardless of who owns the directories.
 
 cleanup_pycache() {
   _head "Bytecode artefacts"
 
   local dir
   while IFS= read -r -d '' dir; do
-    rm -rf "$dir"
-    _ok "removed ${dir}"
+    if (( _DRY_RUN )); then
+      printf "     %s[dry-run] rm -rf %s%s\n" "${DIM}" "${dir}" "${RST}"
+      _ok "would remove ${dir}"
+    else
+      _run "remove ${dir}"  rm -rf "${dir}"
+    fi
   done < <(find "$SCRIPT_DIR" \
     \( -name __pycache__ -o -name .pytest_cache \) \
     -type d -print0 2>/dev/null)
@@ -214,69 +280,73 @@ cleanup_pycache() {
 deploy_files() {
   _head "Deploy files"
 
-  # --- libexec directory ---
-  # Shared with other components; create if absent but never chmod/chown
-  # the directory itself to avoid disturbing co-tenant files.
-  mkdir -p "${LIBEXEC_DIR}"
+  if (( ! _DRY_RUN )); then
+    mkdir -p "${LIBEXEC_DIR}"
+  fi
 
-  install -m 0750 -o root -g root \
-    "${SRC_DIR}/check-for-updates.sh" \
-    "${LIBEXEC_DIR}/check-for-updates.sh"
-  _ok "${LIBEXEC_DIR}/check-for-updates.sh"
+  local files=(
+    "${SRC_DIR}/check-for-updates.sh:${LIBEXEC_DIR}/check-for-updates.sh:0750"
+    "${SRC_DIR}/pb-apt-evaluator.py:${LIBEXEC_DIR}/pb-apt-evaluator.py:0750"
+    "${SRC_DIR}/pb-patch-reporter.sh:${LIBEXEC_DIR}/pb-patch-reporter.sh:0750"
+  )
+  local entry src dst mode
+  for entry in "${files[@]}"; do
+    IFS=':' read -r src dst mode <<< "$entry"
+    if (( _DRY_RUN )); then
+      printf "     %s[dry-run] install -m %s -o root -g root %s %s%s\n" \
+        "${DIM}" "${mode}" "${src}" "${dst}" "${RST}"
+      _ok "${dst}"
+    else
+      _run "${dst}"  install -m "${mode}" -o root -g root "${src}" "${dst}"
+    fi
+  done
 
-  install -m 0750 -o root -g root \
-    "${SRC_DIR}/pb-apt-evaluator.py" \
-    "${LIBEXEC_DIR}/pb-apt-evaluator.py"
-  _ok "${LIBEXEC_DIR}/pb-apt-evaluator.py"
+  if (( _DRY_RUN )); then
+    printf "     %s[dry-run] install -d -m 0755 %s%s\n" "${DIM}" "${STATE_DIR}" "${RST}"
+    _ok "${STATE_DIR}/"
+  else
+    _run "${STATE_DIR}/"  install -d -m 0755 -o root -g root "${STATE_DIR}"
+  fi
 
-  install -m 0750 -o root -g root \
-    "${SRC_DIR}/pb-patch-reporter.sh" \
-    "${LIBEXEC_DIR}/pb-patch-reporter.sh"
-  _ok "${LIBEXEC_DIR}/pb-patch-reporter.sh"
-
-  # --- state directory (world-readable so login check works as any user) ---
-  install -d -m 0755 -o root -g root "${STATE_DIR}"
-  _ok "${STATE_DIR}/"
-
-  # Ensure lock files exist with correct permissions so shared flocks work
-  # for non-root users (read-open requires read permission — 0644 is sufficient).
   local lockfile
   for lockfile in \
     "${STATE_DIR}/patch-state.json.lock" \
     "${STATE_DIR}/patch-suppression.json.lock"
   do
     if [[ ! -e "$lockfile" ]]; then
-      install -m 0644 -o root -g root /dev/null "$lockfile"
-      _ok "created ${lockfile}"
+      if (( _DRY_RUN )); then
+        printf "     %s[dry-run] create %s%s\n" "${DIM}" "${lockfile}" "${RST}"
+        _ok "would create ${lockfile}"
+      else
+        _run "create ${lockfile}"  install -m 0644 -o root -g root /dev/null "${lockfile}"
+      fi
     else
-      chmod 0644 "$lockfile"
-      chown root:root "$lockfile"
-      _ok "verified ${lockfile}"
+      if (( _DRY_RUN )); then
+        _ok "verified ${lockfile}"
+      else
+        chmod 0644 "${lockfile}"
+        chown root:root "${lockfile}"
+        _ok "verified ${lockfile}"
+      fi
     fi
   done
 
-  # --- systemd units ---
   local unit
   for unit in "${SERVICES[@]}"; do
-    install -m 0644 -o root -g root \
-      "${SYSTEMD_SRC}/${unit}" \
-      "${SYSTEMD_DEST}/${unit}"
-    _ok "${SYSTEMD_DEST}/${unit}"
+    if (( _DRY_RUN )); then
+      printf "     %s[dry-run] install %s → %s%s\n" \
+        "${DIM}" "${SYSTEMD_SRC}/${unit}" "${SYSTEMD_DEST}/${unit}" "${RST}"
+      _ok "${SYSTEMD_DEST}/${unit}"
+    else
+      _run "${SYSTEMD_DEST}/${unit}" \
+        install -m 0644 -o root -g root "${SYSTEMD_SRC}/${unit}" "${SYSTEMD_DEST}/${unit}"
+    fi
   done
 }
 
 # =============================================================================
 # ── STEP 5: Namespace-override drop-ins ──────────────────────────────────────
 # =============================================================================
-#
-# On hosts listed in NAMESPACE_OVERRIDE_HOSTS (those whose kernel/container
-# runtime cannot honour CLONE_NEWNS), deploy a drop-in that resets the
-# namespace-requiring sandbox directives.  This resolves exit 226
-# (EXIT_NAMESPACE) without modifying the source unit files, preserving full
-# sandboxing on capable hosts such as PBWEBSRV03.
-#
-# Override source: overrides/<hostname>/<unit>.d/no-namespace.conf
-# Installed to:    /etc/systemd/system/<unit>.d/no-namespace.conf
 
 deploy_overrides() {
   local current_host
@@ -293,11 +363,15 @@ deploy_overrides() {
         local drop_in_dir="${SYSTEMD_DEST}/${unit}.d"
         local dst="${drop_in_dir}/no-namespace.conf"
 
-        [[ -f "$src" ]] || _die "override source not found: ${src}"
+        [[ -f "$src" ]] || _die "override source not found: ${src}" \
+          "Expected: ${src}"
 
-        mkdir -p "$drop_in_dir"
-        install -m 0644 -o root -g root "$src" "$dst"
-        _ok "installed ${dst}"
+        if (( _DRY_RUN )); then
+          printf "     %s[dry-run] install %s → %s%s\n" "${DIM}" "${src}" "${dst}" "${RST}"
+          _ok "would install ${dst}"
+        else
+          _run "install ${dst}"  bash -c "mkdir -p '${drop_in_dir}' && install -m 0644 -o root -g root '${src}' '${dst}'"
+        fi
       done
       return 0
     fi
@@ -307,10 +381,6 @@ deploy_overrides() {
 # =============================================================================
 # ── STEP 6: Verify deployed units ────────────────────────────────────────────
 # =============================================================================
-#
-# Guards against stale unit files or a deploy that silently wrote to the wrong
-# path.  Diffs each deployed unit against its source; aborts if any differ so
-# the operator knows before daemon-reload.
 
 verify_units() {
   _head "Verify systemd units"
@@ -320,22 +390,30 @@ verify_units() {
     local src="${SYSTEMD_SRC}/${unit}"
     local dst="${SYSTEMD_DEST}/${unit}"
 
+    if (( _DRY_RUN )); then
+      _ok "${dst}  [skipped in dry-run]"
+      continue
+    fi
+
     if [[ ! -f "$dst" ]]; then
       _fail "${unit} — not found at ${dst}"
+      _note "Deploy step may have failed; check step 4 output"
       (( mismatches++ )) || true
       continue
     fi
 
     if ! diff -q "$src" "$dst" >/dev/null 2>&1; then
       _fail "${unit} — differs from source"
-      diff "$src" "$dst" >&2 || true
+      _note "diff ${src} ${dst}"
       (( mismatches++ )) || true
     else
       _ok "${dst}"
     fi
   done
 
-  [[ $mismatches -eq 0 ]] || _die "unit verification failed (${mismatches} file(s) differ) — aborting"
+  [[ $mismatches -eq 0 ]] || _die \
+    "unit verification failed (${mismatches} file(s) differ) — aborting" \
+    "Re-run: sudo bash ${SCRIPT_DIR}/install.sh --only check-for-updates"
 }
 
 # =============================================================================
@@ -345,13 +423,22 @@ verify_units() {
 reload_systemd() {
   _head "Reload systemd"
 
-  systemctl daemon-reload
-  _ok "daemon-reload"
+  if (( _DRY_RUN )); then
+    printf "     %s[dry-run] systemctl daemon-reload%s\n" "${DIM}" "${RST}"
+    _ok "daemon-reload"
+    local timer
+    for timer in "${TIMERS[@]}"; do
+      printf "     %s[dry-run] systemctl enable --now %s%s\n" "${DIM}" "${timer}" "${RST}"
+      _ok "would enable + start ${timer}"
+    done
+    return
+  fi
+
+  _run "daemon-reload"  systemctl daemon-reload
 
   local timer
   for timer in "${TIMERS[@]}"; do
-    systemctl enable --now "$timer"
-    _ok "enabled + started ${timer}"
+    _run "enable + start ${timer}"  systemctl enable --now "${timer}"
   done
 }
 
@@ -372,11 +459,26 @@ _END=$(date +%s%N)
 _ELAPSED=$(( (_END - _START) / 1000000 ))
 
 printf '\n%s══ Summary%s\n' "${BOLD}" "${RST}"
-printf '  %sPASS: %d%s   %sFAIL: %d%s   (elapsed: %dms)\n\n' \
-  "${GRN}" "$_pass" "${RST}" "${RED}" "$_fail" "${RST}" "$_ELAPSED"
+printf '  %sPASS: %d%s   %sFAIL: %d%s   %sWARN: %d%s   (elapsed: %dms)\n\n' \
+  "${GRN}" "$_pass" "${RST}" "${RED}" "$_fail" "${RST}" "${YLW}" "$_warn" "${RST}" "$_ELAPSED"
+
+if (( ${#_FAILURES[@]} > 0 )); then
+  printf '%s%sFailed steps:%s\n' "${BOLD}" "${RED}" "${RST}"
+  for _f in "${_FAILURES[@]}"; do
+    printf "  %s✘%s  %s\n" "${RED}" "${RST}" "${_f}"
+  done
+  printf '\n'
+fi
+if (( ${#_WARNINGS[@]} > 0 )); then
+  printf '%s%sWarnings:%s\n' "${BOLD}" "${YLW}" "${RST}"
+  for _w in "${_WARNINGS[@]}"; do
+    printf "  %s⚠%s  %s\n" "${YLW}" "${RST}" "${_w}"
+  done
+  printf '\n'
+fi
 
 if (( _fail > 0 )); then
-  printf '%s%sINSTALL FAILED — %d step(s) failed%s\n\n' "${RED}" "${BOLD}" "$_fail" "${RST}"
+  printf '%s%sDEPLOYMENT FAILED — %d step(s) failed%s\n\n' "${RED}" "${BOLD}" "$_fail" "${RST}"
   exit 1
 fi
 

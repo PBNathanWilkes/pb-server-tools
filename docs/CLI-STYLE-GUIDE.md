@@ -2,7 +2,7 @@
 
 **Applies to:** all Bash scripts in this repository  
 **Canonical reference:** `server-sanity/src/server-sanity-check.sh`  
-**Last updated:** 2026-05-30 (repo v1.0.15)
+**Last updated:** 2026-05-31 (repo v1.0.16)
 
 ---
 
@@ -80,9 +80,9 @@ Colours are declared once, near the top of the script, behind a TTY guard. Scrip
 # ── Colour palette ───────────────────────────────────────────────────────────
 if [[ -t 1 ]]; then
   RED=$'\033[0;31m' GRN=$'\033[0;32m' YLW=$'\033[0;33m'
-  BLU=$'\033[0;34m' BOLD=$'\033[1m'   RST=$'\033[0m'
+  BLU=$'\033[0;34m' DIM=$'\033[2m'    BOLD=$'\033[1m' RST=$'\033[0m'
 else
-  RED='' GRN='' YLW='' BLU='' BOLD='' RST=''
+  RED='' GRN='' YLW='' BLU='' DIM='' BOLD='' RST=''
 fi
 ```
 
@@ -96,6 +96,7 @@ Omit colours not used in the script (ShellCheck SC2034 — unused variable). For
 | `GRN`    | Green   | Passes, success                        |
 | `YLW`    | Yellow  | Warnings                               |
 | `BLU`    | Blue    | Section headers (`_head`)              |
+| `DIM`    | Dim     | Annotations (`_note`), progress dots (`_run`), dry-run/verbose lines |
 | `BOLD`   | Bold    | Section headers, summary result line   |
 | `RST`    | Reset   | Terminates every coloured span         |
 
@@ -105,35 +106,86 @@ Every colour span must be closed with `${RST}`. Never leave a colour open at end
 
 ## 4. Output primitives
 
-Define these four functions early, before any output-producing code. They centralise formatting and keep the counter increments co-located with the print call.
+Define these functions early, before any output-producing code. They centralise formatting and keep the counter increments co-located with the print call.
 
 ```bash
 # ── Primitives ───────────────────────────────────────────────────────────────
-_ok()   { printf "  %s✔%s  %s\n" "${GRN}" "${RST}" "$*"; (( ++_pass )); }
-_fail() { printf "  %s✘%s  %s\n" "${RED}" "${RST}" "$*"; (( ++_fail )); }
-_warn() { printf "  %s⚠%s  %s\n" "${YLW}" "${RST}" "$*"; (( ++_warn )); }
-_head() { printf "\n%s%s══ %s%s\n" "${BOLD}" "${BLU}" "$*" "${RST}"; }
-```
-
-And for optional/skipped sections:
-
-```bash
+_ok()   {
+  (( ++_pass ))
+  (( _QUIET )) && return
+  printf "  %s✔%s  %s\n" "${GRN}" "${RST}" "$*"
+}
+_fail() {
+  (( ++_fail )) || true
+  _FAILURES+=("$*")
+  printf "  %s✘%s  %s\n" "${RED}" "${RST}" "$*"
+}
+_warn() {
+  (( ++_warn )) || true
+  _WARNINGS+=("$*")
+  printf "  %s⚠%s  %s\n" "${YLW}" "${RST}" "$*"
+}
+_note() { printf "     %s%s%s\n" "${DIM}" "$*" "${RST}"; }
+_head() {
+  local now elapsed_str=''
+  now=$(date +%s%N)
+  if (( _VERBOSE && _SECTION_START > 0 )); then
+    local ms=$(( (now - _SECTION_START) / 1000000 ))
+    elapsed_str="  ${DIM}(${ms}ms)${RST}"
+  fi
+  _SECTION_START=$now
+  printf "\n%s%s══ %s%s%s\n" "${BOLD}" "${BLU}" "$*" "${RST}" "${elapsed_str}"
+}
 _skip() { printf "  ⊘  %s\n" "$*"; }
-```
-
-And for fatal errors that must exit immediately:
-
-```bash
-_die()  { printf "\n%s%sERROR:%s %s\n" "${BOLD}" "${RED}" "${RST}" "$*" >&2; exit 1; }
+_die()  {
+  local msg="$1" hint="${2:-}"
+  printf "\n%s%sERROR:%s %s\n" "${BOLD}" "${RED}" "${RST}" "${msg}" >&2
+  if [[ -n "${hint}" ]]; then
+    printf "     %s%s%s\n" "${DIM}" "${hint}" "${RST}" >&2
+  fi
+  exit 1
+}
+# _run <label> <cmd> [args...]
+# Shows a progress dot before executing, then records the result via
+# _ok/_fail with elapsed time.  In --dry-run mode, prints the command
+# and records _ok without executing.  In --verbose mode, also prints
+# the underlying command before running it.
+_run() {
+  local label="$1"; shift
+  local t0 t1 ms rc=0
+  printf "  %s·%s  %s\n" "${DIM}" "${RST}" "${label}"
+  if (( _VERBOSE )); then
+    printf "     %s%s%s\n" "${DIM}" "$*" "${RST}"
+  fi
+  if (( _DRY_RUN )); then
+    printf "     %s[dry-run] %s%s\n" "${DIM}" "$*" "${RST}"
+    _ok "${label}"
+    return 0
+  fi
+  t0=$(date +%s%N)
+  "$@" || rc=$?
+  t1=$(date +%s%N)
+  ms=$(( (t1 - t0) / 1000000 ))
+  if (( rc == 0 )); then
+    _ok "${label}  (${ms}ms)"
+  else
+    _fail "${label}  (exit ${rc})"
+  fi
+  return $rc
+}
 ```
 
 Rules:
 
-- `_ok`, `_fail`, `_warn` always increment their counter. Never call the `printf` directly — always go through the primitive.
+- `_ok`, `_fail`, `_warn` always increment their counter. Never call `printf` directly — always go through the primitive.
+- `_ok` is a no-op when `_QUIET=1`. All other primitives always print.
+- `_fail` and `_warn` append their message to `_FAILURES[]` / `_WARNINGS[]`. These arrays are printed in the summary block so the operator never has to scroll to find failures.
 - Two spaces of indent, then the glyph, then two more spaces, then the message. This indentation is load-bearing: it visually separates individual check results from section headers.
-- `_head` emits a blank line before the banner. Do not add a blank `printf` before calling `_head` — it already provides the vertical separation.
+- `_note` prints a dim indented annotation with five-space indent (two more than `_ok`/`_fail`). Use it immediately after a `_fail` or `_warn` to add remediation hints, expected vs actual detail, or a re-run command. No glyph, no counter.
+- `_head` emits a blank line before the banner and records `_SECTION_START` for per-section timing. In `--verbose` mode it appends the elapsed time since the previous section. Do not add a blank `printf` before calling `_head` — it already provides vertical separation.
+- `_run` is for any operation that takes non-trivial time or is mutating. It prints a dim `·` progress dot before the operation so the operator can see progress without waiting; replaces it with `_ok`/`_fail` after completion. In `--dry-run` mode it prints `[dry-run] <cmd>` and records `_ok` without executing. In `--verbose` mode it prints the command before running.
 - `_skip` is used when an optional component is absent. It does not increment any counter.
-- `_die` writes to stderr and exits 1. It does not increment `_fail` — the script terminates immediately.
+- `_die` writes to stderr and exits 1. It does not increment `_fail` — the script terminates immediately. The optional second argument is a remediation hint printed below the error.
 
 **Message format within primitives:**
 
@@ -146,27 +198,34 @@ dir:     /var/log/msmtp
 timer:   pb-check-for-updates.timer  (next: Tue 2026-06-02 03:00:00)
 ```
 
-On failure, state what was expected vs what was found in parentheses:
+On failure, state what was expected vs what was found in parentheses, followed by a `_note` with the fix:
 
-```
-permissions: /etc/shadow  (expected 640/root, got 644/root)
-ownership: /var/lib/email-dns-monitor  (expected emaildns, got root)
+```bash
+_fail "permissions: /etc/shadow  (expected 640/root, got 644/root)"
+_note "Fix: chmod 640 /etc/shadow && chown root /etc/shadow"
 ```
 
 ---
 
 ## 5. Counters and summary block
 
-### Counters
+### Counters and accumulators
 
-Declare counters immediately after the colour palette:
+Declare counters, accumulator arrays, mode flags, and the section-timing variable immediately after the colour palette:
 
 ```bash
-# ── Counters ─────────────────────────────────────────────────────────────────
+# ── Counters and accumulators ─────────────────────────────────────────────────
 _pass=0; _fail=0; _warn=0
+_FAILURES=(); _WARNINGS=()
+
+# ── Mode flags (set by argument parsing) ─────────────────────────────────────
+_QUIET=0; _VERBOSE=0; _DRY_RUN=0   # omit _DRY_RUN for check-only scripts
+
+# ── Section timing ────────────────────────────────────────────────────────────
+_SECTION_START=0
 ```
 
-Omit `_warn` (and `YLW`) if the script has no `_warn` primitive.
+Omit `_warn`/`_WARNINGS`/`YLW` if the script has no `_warn` primitive. Omit `_DRY_RUN` for read-only scripts (check scripts, not installers).
 
 ### Timing
 
@@ -189,6 +248,21 @@ printf '\n%s══ Summary%s\n' "${BOLD}" "${RST}"
 printf '  %sPASS: %d%s   %sFAIL: %d%s   %sWARN: %d%s   (elapsed: %dms)\n\n' \
   "${GRN}" "$_pass" "${RST}" "${RED}" "$_fail" "${RST}" "${YLW}" "$_warn" "${RST}" "$_ELAPSED"
 
+if (( ${#_FAILURES[@]} > 0 )); then
+  printf '%s%sFailed checks:%s\n' "${BOLD}" "${RED}" "${RST}"
+  for _f in "${_FAILURES[@]}"; do
+    printf "  %s✘%s  %s\n" "${RED}" "${RST}" "${_f}"
+  done
+  printf '\n'
+fi
+if (( ${#_WARNINGS[@]} > 0 )); then
+  printf '%s%sWarnings:%s\n' "${BOLD}" "${YLW}" "${RST}"
+  for _w in "${_WARNINGS[@]}"; do
+    printf "  %s⚠%s  %s\n" "${YLW}" "${RST}" "${_w}"
+  done
+  printf '\n'
+fi
+
 if (( _fail > 0 )); then
   printf '%s%sNOT OK — %d check(s) failed%s\n\n' "${RED}" "${BOLD}" "$_fail" "${RST}"
   _EXIT=1
@@ -203,7 +277,9 @@ fi
 exit "$_EXIT"
 ```
 
-For scripts without warnings (e.g. installers), simplify accordingly and use a result-appropriate message (`ALL COMPONENTS INSTALLED`, `INSTALL FAILED — N step(s) failed`).
+For scripts without warnings (e.g. installers), simplify the outcome lines accordingly (`DEPLOYMENT COMPLETE`, `DEPLOYMENT FAILED — N step(s) failed`).
+
+The failure and warning enumeration blocks are mandatory. The operator must never need to scroll to find which checks failed — the summary provides the complete list.
 
 The `(elapsed: Nms)` field is always present. It is derived from nanosecond timestamps to avoid platform-specific `date` flag differences.
 
@@ -248,6 +324,20 @@ The hostname is `$(hostname -s)` (short name). The date format is `%Y-%m-%d %H:%
 ---
 
 ## 8. Argument parsing
+
+### Standard flags
+
+All installer scripts accept `--dry-run`, `--quiet`, and `--verbose`. Check-only scripts accept `--quiet` and `--verbose` (not `--dry-run`). Declare the corresponding mode variables immediately after the colour palette (see §5).
+
+Flags are passed through from the top-level orchestrator to sub-installers via `run_component`:
+
+```bash
+local flags=()
+(( _DRY_RUN )) && flags+=(--dry-run)
+(( _QUIET   )) && flags+=(--quiet)
+(( _VERBOSE )) && flags+=(--verbose)
+bash "${component_dir}/install.sh" "${flags[@]}"
+```
 
 ### Simple scripts (flags only, no value-taking options)
 
