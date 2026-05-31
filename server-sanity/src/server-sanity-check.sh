@@ -863,13 +863,22 @@ if (( _EMAIL_ON_FAILURE && _fail > 0 )); then
 fi
 
 # ── Journal log line ──────────────────────────────────────────────────────────
-# Emitted to stderr so it reaches the systemd journal but not the email body.
+# Written to the systemd journal via systemd-cat so the line lands regardless
+# of whether the script is invoked by systemd or run interactively.  When run
+# interactively stderr goes to the terminal only; systemd-cat routes directly
+# to journald under the same SyslogIdentifier used by the service unit.
+# Also printed to stderr for terminal visibility.
 # Grep-friendly for post-hoc queries:
-#   journalctl -u pb-server-sanity-check | grep SANITY_CHECK_RESULT
+#   journalctl -t pb-server-sanity | grep SANITY_CHECK_RESULT
 _END=$(date +%s%N)
 _ELAPSED=$(( (_END - _START) / 1000000 ))
-printf 'SANITY_CHECK_RESULT pass=%d fail=%d warn=%d elapsed_ms=%d\n' \
-  "$_pass" "$_fail" "$_warn" "$_ELAPSED" >&2
+_sanity_result_line=$(printf 'SANITY_CHECK_RESULT pass=%d fail=%d warn=%d elapsed_ms=%d' \
+  "$_pass" "$_fail" "$_warn" "$_ELAPSED")
+printf '%s\n' "$_sanity_result_line" >&2
+if command -v systemd-cat >/dev/null 2>&1; then
+  printf '%s\n' "$_sanity_result_line" \
+    | systemd-cat -t pb-server-sanity -p info 2>/dev/null || true
+fi
 
 _EXIT_CLEAN=1
 exit "$_EXIT"
