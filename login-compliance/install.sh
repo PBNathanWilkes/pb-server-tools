@@ -88,10 +88,33 @@ run_tests() {
 
   local test_user="${SUDO_USER:-$(id -un)}"
 
-  printf '  running test_login_compliance.sh\n'
-  sudo -u "$test_user" bash "${TESTS_DIR}/test_login_compliance.sh" \
-    || _die "login compliance tests failed — aborting deployment"
-  _ok "test_login_compliance.sh passed"
+  # _run_bash_tests <label> <test_script>
+  # Captures bash test harness output (PASS/FAIL per line, --- Results --- footer);
+  # re-emits each case through _ok/_fail.  Aborts deployment on any test failure.
+  _run_bash_tests() {
+    local label="$1" test_script="$2"
+    printf '  running %s\n' "$label"
+    local raw exit_code=0
+    raw="$(sudo -u "$test_user" bash "$test_script" 2>&1)" || exit_code=$?
+    local line
+    while IFS= read -r line; do
+      if [[ "$line" =~ ^[[:space:]]+(PASS|FAIL)[[:space:]]+(.+)$ ]]; then
+        local result="${BASH_REMATCH[1]}" name="${BASH_REMATCH[2]}"
+        if [[ "$result" == "PASS" ]]; then
+          _ok "$name"
+        else
+          _fail "$name"
+        fi
+      elif [[ "$line" =~ ^[[:space:]]{6,} ]]; then
+        printf '  %s\n' "${line#"${line%%[![:space:]]*}"}"
+      fi
+    done <<<"$raw"
+    if (( exit_code != 0 )); then
+      _die "${label} failed — aborting deployment"
+    fi
+  }
+
+  _run_bash_tests "test_login_compliance.sh" "${TESTS_DIR}/test_login_compliance.sh"
 }
 
 # =============================================================================

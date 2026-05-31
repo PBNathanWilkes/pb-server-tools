@@ -23,6 +23,7 @@
 13. [stdout vs stderr](#13-stdout-vs-stderr)
 14. [Timing](#14-timing)
 15. [What the old scripts do differently](#15-what-the-old-scripts-do-differently)
+16. [Test runner output](#16-test-runner-output)
 
 ---
 
@@ -454,3 +455,91 @@ Display as `(elapsed: ${_ELAPSED}ms)` in the summary line.
 | `@@N@@` placeholder | Used in `security-hardening-check.sh` as a newline surrogate for inter-process transport through `IFS='|'` splits | Not used outside that script; do not introduce in new scripts |
 
 When making changes to the old scripts, you are not required to rewrite them to this style. Apply the new style to any new script or to an old script that is being substantially reworked.
+
+---
+
+## 16. Test runner output
+
+Test harnesses (`test_*.sh`, pytest) are standalone scripts with their own output format. When an installer invokes a test harness, it must **not** let raw harness output stream through to the terminal. Raw output breaks the structured outline: `PASS T01_name` lines and `--- Results ---` banners have no glyphs, no colour, and no indent hierarchy.
+
+### Contract
+
+- Capture the harness's stdout+stderr into a variable.
+- Parse each result line and re-emit it through `_ok` or `_fail`.
+- Suppress progress noise (pytest percentage markers, blank lines, `--- Results ---` trailers).
+- Preserve failure detail lines (indented `got =` / `want =` lines from the bash harnesses; `FAILED path::name - reason` lines from pytest) — print them with two-space indent, without going through a counter primitive.
+- If the harness exits non-zero, call `_die` after the per-case output; do not call `_die` instead of parsing.
+
+### Bash harness wrapper (`_run_bash_tests`)
+
+Bash harnesses emit `  PASS name` / `  FAIL name` per case. Match with:
+
+```bash
+[[ "$line" =~ ^[[:space:]]+(PASS|FAIL)[[:space:]]+(.+)$ ]]
+```
+
+```bash
+# _run_bash_tests <label> <test_script>
+_run_bash_tests() {
+  local label="$1" test_script="$2"
+  printf '  running %s\n' "$label"
+  local raw exit_code=0
+  raw="$(sudo -u "$test_user" bash "$test_script" 2>&1)" || exit_code=$?
+  local line
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^[[:space:]]+(PASS|FAIL)[[:space:]]+(.+)$ ]]; then
+      local result="${BASH_REMATCH[1]}" name="${BASH_REMATCH[2]}"
+      if [[ "$result" == "PASS" ]]; then _ok "$name"; else _fail "$name"; fi
+    elif [[ "$line" =~ ^[[:space:]]{6,} ]]; then
+      printf '  %s\n' "${line#"${line%%[![:space:]]*}"}"
+    fi
+  done <<<"$raw"
+  (( exit_code != 0 )) && _die "${label} failed — aborting deployment"
+}
+```
+
+### Pytest wrapper (`_run_pytest`)
+
+Pytest `-v` emits `path::Class::test_name PASSED [ N%]` per case. Match with:
+
+```bash
+[[ "$line" =~ ::([^[:space:]]+)[[:space:]]+(PASSED|FAILED) ]]
+```
+
+```bash
+# _run_pytest <label> <test_file>
+_run_pytest() {
+  local label="$1" test_file="$2"
+  printf '  running %s\n' "$label"
+  local raw exit_code=0
+  raw="$(sudo -u "$test_user" python3 -m pytest "$test_file" -v 2>&1)" || exit_code=$?
+  local line
+  while IFS= read -r line; do
+    if [[ "$line" =~ ::([^[:space:]]+)[[:space:]]+(PASSED|FAILED) ]]; then
+      local name="${BASH_REMATCH[1]}" result="${BASH_REMATCH[2]}"
+      if [[ "$result" == "PASSED" ]]; then _ok "$name"; else _fail "$name"; fi
+    fi
+  done <<<"$raw"
+  if (( exit_code != 0 )); then
+    while IFS= read -r line; do
+      [[ "$line" =~ ^FAILED[[:space:]] ]] && printf '       %s\n' "$line"
+    done <<<"$raw"
+    _die "${label} failed — aborting deployment"
+  fi
+}
+```
+
+### Placement
+
+Declare `_run_bash_tests` / `_run_pytest` as local functions **inside** the `run_tests()` function that calls them. They are not called anywhere else and do not belong at script scope.
+
+### Test harness format requirement
+
+New bash test harnesses must emit per-case lines in exactly this format so the wrapper regex matches:
+
+```
+  PASS  T01 description of test
+  FAIL  T01 description of test
+```
+
+Two spaces before the keyword, two spaces after. The `test_login_compliance.sh` and `test_security_hardening.sh` harnesses already use this format (`pass()`/`fail()` functions). The `test_pb_patch_reporter.sh` harness uses single-space after the keyword (`_pass`/`_fail` functions) — both are matched by the `[[:space:]]+` quantifier in the regex.

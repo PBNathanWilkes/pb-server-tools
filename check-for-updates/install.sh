@@ -122,15 +122,68 @@ run_tests() {
 
   local test_user="${SUDO_USER:-$(id -un)}"
 
-  printf '  running test_pb_apt_evaluator.py\n'
-  sudo -u "$test_user" python3 -m pytest "${TESTS_DIR}/test_pb_apt_evaluator.py" -v \
-    || _die "Python unit tests failed — aborting deployment"
-  _ok "test_pb_apt_evaluator.py passed"
+  # _run_pytest <label> <test_file>
+  # Captures pytest -v output; re-emits each PASSED/FAILED line through
+  # _ok/_fail so individual results appear as indented checkmarks in the
+  # structured outline.  The raw progress output (percentages) is suppressed.
+  # Aborts deployment on any test failure.
+  _run_pytest() {
+    local label="$1" test_file="$2"
+    printf '  running %s\n' "$label"
+    local raw exit_code=0
+    raw="$(sudo -u "$test_user" python3 -m pytest "$test_file" -v 2>&1)" || exit_code=$?
+    local line
+    while IFS= read -r line; do
+      # Per-test result lines: "path::Class::test_name PASSED [ N%]"
+      if [[ "$line" =~ ::([^[:space:]]+)[[:space:]]+(PASSED|FAILED) ]]; then
+        local name="${BASH_REMATCH[1]}" result="${BASH_REMATCH[2]}"
+        if [[ "$result" == "PASSED" ]]; then
+          _ok "$name"
+        else
+          _fail "$name"
+        fi
+      fi
+    done <<<"$raw"
+    if (( exit_code != 0 )); then
+      # Print the failure detail lines from pytest for diagnosis
+      while IFS= read -r line; do
+        [[ "$line" =~ ^FAILED[[:space:]] ]] && printf '       %s\n' "$line"
+      done <<<"$raw"
+      _die "${label} failed — aborting deployment"
+    fi
+  }
 
-  printf '  running test_pb_patch_reporter.sh\n'
-  sudo -u "$test_user" bash "${TESTS_DIR}/test_pb_patch_reporter.sh" \
-    || _die "Reporter tests failed — aborting deployment"
-  _ok "test_pb_patch_reporter.sh passed"
+  # _run_bash_tests <label> <test_script>
+  # Captures bash test harness output (PASS/FAIL per line, --- Results --- footer);
+  # re-emits each case through _ok/_fail.  Aborts deployment on any test failure.
+  _run_bash_tests() {
+    local label="$1" test_script="$2"
+    printf '  running %s\n' "$label"
+    local raw exit_code=0
+    raw="$(sudo -u "$test_user" bash "$test_script" 2>&1)" || exit_code=$?
+    local line
+    while IFS= read -r line; do
+      # Harness lines: "  PASS T01_name" or "  FAIL T01_name"
+      if [[ "$line" =~ ^[[:space:]]+(PASS|FAIL)[[:space:]]+(.+)$ ]]; then
+        local result="${BASH_REMATCH[1]}" name="${BASH_REMATCH[2]}"
+        if [[ "$result" == "PASS" ]]; then
+          _ok "$name"
+        else
+          _fail "$name"
+          # Print any detail lines that follow a FAIL (indented by the harness)
+        fi
+      # Detail lines under a FAIL: "       got  = ..."
+      elif [[ "$line" =~ ^[[:space:]]{6,} ]]; then
+        printf '  %s\n' "${line#"${line%%[![:space:]]*}"}"
+      fi
+    done <<<"$raw"
+    if (( exit_code != 0 )); then
+      _die "${label} failed — aborting deployment"
+    fi
+  }
+
+  _run_pytest      "test_pb_apt_evaluator.py"    "${TESTS_DIR}/test_pb_apt_evaluator.py"
+  _run_bash_tests  "test_pb_patch_reporter.sh"   "${TESTS_DIR}/test_pb_patch_reporter.sh"
 }
 
 # =============================================================================
