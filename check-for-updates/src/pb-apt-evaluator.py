@@ -5,6 +5,13 @@
 # Phasing detection: apt_pkg.DepCache.phasing_applied() (native, in-process).
 # Fallback: apt-cache policy subprocess (only if phasing_applied() raises).
 #
+# v4.2.22 — Fix: _check_lts() now logs the tool's exit code and stderr when no
+#            upgrade string is found, so the operator can distinguish three silent
+#            failure modes: (a) Canonical upgrade path not yet open in
+#            meta-release-lts (normal between an LTS initial release and .1);
+#            (b) /etc/update-manager/release-upgrades absent or Prompt=never;
+#            (c) changelogs.ubuntu.com unreachable.  Exception path logs the
+#            exception rather than swallowing it silently.  See KFC #5.
 # v4.2.16 — Fix: _check_lts() now calls `do-release-upgrade -c` without
 #            `-f DistUpgradeViewNonInteractive`. On Ubuntu 24.04+ the -f flag
 #            suppresses all output, causing lts_upgrade_available to always be
@@ -36,7 +43,7 @@ from datetime import datetime, timezone
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-VERSION = "4.2.16"
+VERSION = "4.2.22"
 SCRIPT_NAME = os.path.basename(__file__)
 
 STATE_DIR      = "/var/lib/pb-maintenance"
@@ -529,6 +536,13 @@ def _check_lts() -> tuple[bool, str | None]:
     output when no upgrade is available.
 
     LANG/LC_ALL=C prevents localised output from breaking the regex.
+
+    When no upgrade string is found, the tool's stderr and exit code are logged
+    at INFO level so the operator can distinguish three silent-failure modes:
+      (a) Canonical has not yet opened the upgrade path in meta-release-lts
+          (normal between an LTS initial release and its .1 point release);
+      (b) /etc/update-manager/release-upgrades absent or Prompt=never;
+      (c) changelogs.ubuntu.com unreachable.
     """
     try:
         result = subprocess.run(
@@ -540,12 +554,22 @@ def _check_lts() -> tuple[bool, str | None]:
             env=dict(os.environ, LANG="C", LC_ALL="C"),
         )
         output = result.stdout + result.stderr
-    except Exception:
+    except Exception as exc:
+        _log_info(f"WARN: LTS check: do-release-upgrade raised: {exc}")
         return False, None
 
     m = re.search(r"New release '?(\d+\.\d+)", output)
     if m:
         return True, m.group(1)
+
+    # No upgrade string found.  Log the tool's exit code and any stderr so the
+    # operator can distinguish a Canonical-side gate (upgrade path not yet open
+    # in meta-release-lts) from a local misconfiguration or network failure.
+    detail = result.stderr.strip()[:200] if result.stderr.strip() else "(no output)"
+    _log_info(
+        f"LTS check: no upgrade available "
+        f"(do-release-upgrade -c exited {result.returncode}; {detail})"
+    )
     return False, None
 
 

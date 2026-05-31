@@ -4,7 +4,46 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [4.2.21] — 2026-05-30
+## [4.2.22] — 2026-05-30
+
+### Fixed
+
+- `pb-apt-evaluator.py`: `_check_lts()` silently discarded all diagnostic
+  detail when `do-release-upgrade -c` produced no matching output, making three
+  distinct failure modes indistinguishable in the evaluator log:
+  (a) Canonical upgrade-path gate not yet open in `meta-release-lts` (normal
+  between an LTS initial release and its `.1` point release, ~4 months);
+  (b) `/etc/update-manager/release-upgrades` absent or `Prompt=never`;
+  (c) `changelogs.ubuntu.com` unreachable.
+
+  Fixed by logging the tool's exit code and stderr text (up to 200 chars) when
+  no upgrade string is found. Truly silent exits (cases b/c) log `(no output)`
+  to distinguish them from case (a), which carries the human-readable
+  `"There is no development version of an LTS available."` message. The
+  exception path now logs the exception message instead of swallowing it. See
+  KFC #5.
+
+### Tests
+
+- `tests/unit/test_pb_apt_evaluator.py`: added 3 tests to `TestCheckLts`
+  (now 15 total):
+  - `test_no_match_logs_exit_code_and_stderr` — exit code and stderr text
+    appear in log when no upgrade string found.
+  - `test_no_match_empty_output_logs_no_output_sentinel` — `(no output)`
+    sentinel logged on truly silent exit.
+  - `test_exception_logs_exception_detail` — exception message logged when
+    subprocess raises.
+
+### Files changed
+
+- `check-for-updates/src/pb-apt-evaluator.py`
+- `check-for-updates/tests/unit/test_pb_apt_evaluator.py`
+- `check-for-updates/DEV-GUIDE.md` (KFC #5 added; §5 deployment gate updated)
+- `check-for-updates/CHANGELOG.md` (this file)
+
+---
+
+
 
 ### Changed
 

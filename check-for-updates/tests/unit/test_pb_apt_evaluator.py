@@ -833,6 +833,64 @@ class TestCheckLts(unittest.TestCase):
         self.assertTrue(available)
         self.assertEqual(version, "26.04")
 
+    # --- Diagnostic logging on silent no-match ---
+
+    def test_no_match_logs_exit_code_and_stderr(self):
+        """When no upgrade string is found, exit code and stderr are logged.
+
+        Guards the KFC #5 fix: previously the function returned silently,
+        making it impossible to distinguish 'Canonical gate not open' from
+        'misconfiguration' or 'network unreachable' in the evaluator log.
+        """
+        with patch("subprocess.run") as mock_run, \
+             patch.object(_mod, "_log_info") as mock_log:
+            mock_run.return_value = MagicMock(
+                stdout="Checking for a new Ubuntu release\n",
+                stderr="There is no development version of an LTS available.\n",
+                returncode=1,
+            )
+            result = _mod._check_lts()
+
+        self.assertEqual(result, (False, None))
+        logged = " ".join(str(c) for c in mock_log.call_args_list)
+        self.assertIn("1", logged,
+            "Exit code must appear in log output")
+        self.assertIn("There is no development version", logged,
+            "Actual stderr from do-release-upgrade must appear in log output")
+
+    def test_no_match_empty_output_logs_no_output_sentinel(self):
+        """When tool produces no output at all, log says '(no output)' rather than blank.
+
+        Distinguishes the Prompt=never / network-blocked case (truly silent)
+        from the meta-release-lts gate case (has a human-readable message).
+        """
+        with patch("subprocess.run") as mock_run, \
+             patch.object(_mod, "_log_info") as mock_log:
+            mock_run.return_value = MagicMock(
+                stdout="", stderr="", returncode=1,
+            )
+            _mod._check_lts()
+
+        logged = " ".join(str(c) for c in mock_log.call_args_list)
+        self.assertIn("(no output)", logged,
+            "Truly silent failure must log '(no output)' sentinel")
+
+    def test_exception_logs_exception_detail(self):
+        """When subprocess raises, the exception message is logged.
+
+        Previously the exception was swallowed entirely, leaving no trace
+        in the log file.
+        """
+        with patch("subprocess.run") as mock_run, \
+             patch.object(_mod, "_log_info") as mock_log:
+            mock_run.side_effect = FileNotFoundError("do-release-upgrade not found")
+            result = _mod._check_lts()
+
+        self.assertEqual(result, (False, None))
+        logged = " ".join(str(c) for c in mock_log.call_args_list)
+        self.assertIn("do-release-upgrade", logged,
+            "Exception detail must appear in log output")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

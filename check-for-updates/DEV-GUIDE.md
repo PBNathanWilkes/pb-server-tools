@@ -1,7 +1,7 @@
 # DEV-GUIDE.md — check-for-updates Development Guide
 
 **Project:** `check-for-updates`
-**Current version:** v4.2.20
+**Current version:** v4.2.22
 **Platform:** Ubuntu 24.04 Noble
 
 ---
@@ -181,6 +181,54 @@ Only remove if a specific `/tmp`-related failure is reproduced.
 
 ---
 
+### KFC #5 — `v4.2.16–v4.2.21`: `_check_lts()` swallowed all silent-failure detail
+
+**Observed:** After the v4.2.16 fix (correct command, correct locale), three
+distinct conditions all caused `_check_lts()` to return `(False, None)` with no
+log output, making them indistinguishable in the evaluator log:
+
+- **(a) Canonical upgrade-path gate not open** (normal behaviour): `meta-release-lts`
+  has not yet marked the next LTS as upgrade-available. This occurs between an
+  LTS initial release (e.g. 26.04, 2026-04-23) and its `.1` point release
+  (~4 months later, when Canonical opens the path). `do-release-upgrade -c` exits 1
+  with `"There is no development version of an LTS available."` on stderr.
+
+- **(b) Local misconfiguration**: `/etc/update-manager/release-upgrades` absent,
+  or `Prompt=never`. Tool exits 1 silently (no output).
+
+- **(c) Network unreachable**: `changelogs.ubuntu.com` blocked or unavailable.
+  Tool exits non-zero with a network error on stderr.
+
+In all three cases the evaluator log contained nothing after the LTS check call.
+Operators investigating `lts_upgrade_available: false` had no signal from the log
+as to which condition applied.
+
+**Failure mode:** `lts_upgrade_available: false` in state file with no
+diagnostic in the log — operator cannot determine whether this is expected or
+a misconfiguration.
+
+**Fix applied:** v4.2.22 — `_check_lts()` logs the tool's exit code and stderr
+text (up to 200 chars) when no upgrade string is found. Truly silent failures
+log `(no output)` to distinguish case (b)/(c) from case (a). Exception path
+logs the exception message instead of swallowing it.
+
+**Current-version mitigation:** Any `lts_upgrade_available: false` result now
+produces a log line of the form:
+```
+LTS check: no upgrade available (do-release-upgrade -c exited 1; There is no development version of an LTS available.)
+```
+or for a silent exit:
+```
+LTS check: no upgrade available (do-release-upgrade -c exited 1; (no output))
+```
+
+**Expected log output during case (a) (between LTS release and .1):** The
+`"There is no development version of an LTS available."` message from
+`do-release-upgrade` is normal and expected. It means Canonical has not yet
+opened the upgrade path in `meta-release-lts`; no action required.
+
+---
+
 ### KFC #4 — `v3.10.17`: Dual `dist-upgrade -s` invocation caused phasing races
 
 **Observed:** `get_actual_upgrades()` was called independently inside both
@@ -261,6 +309,26 @@ command -v jq && jq --version
 
 # 3. Dry-run evaluator parity check (evaluator changes only)
 sudo python3 src/pb-apt-evaluator.py --mode check --dry-run | python3 -m json.tool
+
+# 4. Verify LTS check produces a diagnostic log line
+#    Expected output varies by phase:
+#
+#    Upgrade path open (after .1 point release):
+#      lts_upgrade_available: true, lts_upgrade_version: "XX.04"
+#
+#    Canonical gate not yet open (between initial release and .1, ~4 months):
+#      lts_upgrade_available: false
+#      Log line: "LTS check: no upgrade available (do-release-upgrade -c exited 1;
+#                 There is no development version of an LTS available.)"
+#      This is NORMAL. No action required. Wait for the .1 point release.
+#
+#    Silent exit — local misconfiguration or network blocked:
+#      lts_upgrade_available: false
+#      Log line: "LTS check: no upgrade available (do-release-upgrade -c exited 1;
+#                 (no output))"
+#      Action: check /etc/update-manager/release-upgrades (Prompt=lts) and
+#               curl https://changelogs.ubuntu.com/meta-release-lts
+sudo python3 src/pb-apt-evaluator.py --mode check --dry-run 2>&1 | grep -E "LTS check|lts_upgrade"
 ```
 
 Unit tests are run automatically by `install.sh`; do not run them separately
