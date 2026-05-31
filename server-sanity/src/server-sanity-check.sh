@@ -755,7 +755,14 @@ check_last_run pb-server-sanity-check.service
 # uses SuccessExitStatus=0 1, so a run with failures is still "success" at the
 # systemd level).  A missing journal line is a warning — expected on a freshly
 # provisioned host.
-_sanity_journal_line=$(journalctl -t pb-server-sanity --no-pager -n 200 2>/dev/null \
+#
+# --until bounds the query to before this run started so the previous run's
+# line is found whether we are running interactively or via systemd.  An
+# interactive run writes SANITY_CHECK_RESULT to the terminal (stderr), not to
+# the journal, so the current run's line is never present at query time.
+_sanity_until=$(date -d "@$(( _START / 1000000000 ))" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || true)
+_sanity_journal_line=$(journalctl -t pb-server-sanity --no-pager \
+  ${_sanity_until:+--until="$_sanity_until"} 2>/dev/null \
   | grep 'SANITY_CHECK_RESULT' | tail -1 || true)
 
 if [[ -z $_sanity_journal_line ]]; then
