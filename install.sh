@@ -382,10 +382,8 @@ fi
 _EXIT_CLEAN=1
 printf '%s%sALL COMPONENTS INSTALLED%s\n\n' "${GRN}" "${BOLD}" "${RST}"
 
-printf 'Next steps:\n'
-printf '  1. Verify msmtp config:    sudo msmtp --serverinfo --host=<smtp-host>\n'
-printf '  2. Check-for-updates:      sudo /usr/local/libexec/pb-maintenance/check-for-updates.sh --validate\n'
-printf '  3. Security hardening:     sudo /usr/local/libexec/pb-maintenance/security-hardening-check.sh --validate\n'
-printf '  4. Login compliance:       add snippet to ~/.bashrc (printed during login-compliance install)\n'
-printf '  5. Confirm timers:         systemctl list-timers --all --no-pager\n'
-printf '  6. Run sanity check:       sudo server-sanity-check\n'
+# Timers, deployed files, and syntax have been verified above.
+# Optional post-install verification:
+printf '%sOptional:%s\n' "${DIM}" "${RST}"
+printf '  Test email delivery:  sudo /usr/local/libexec/pb-maintenance/check-for-updates.sh --validate\n'
+printf '  Test email delivery:  sudo /usr/local/libexec/pb-maintenance/security-hardening-check.sh --validate\n'

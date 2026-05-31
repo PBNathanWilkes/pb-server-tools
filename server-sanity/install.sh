@@ -385,9 +385,3 @@ fi
 
 _EXIT_CLEAN=1
 printf '%s%sDEPLOYMENT COMPLETE%s\n\n' "${GRN}" "${BOLD}" "${RST}"
-
-printf 'Usage:\n'
-printf '  sudo server-sanity-check\n'
-printf '  sudo server-sanity-check --email-on-failure\n\n'
-printf 'Scheduled watchdog:\n'
-printf '  systemctl status pb-server-sanity-check.timer\n\n'
