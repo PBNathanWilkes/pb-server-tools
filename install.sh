@@ -385,5 +385,7 @@ printf '%s%sALL COMPONENTS INSTALLED%s\n\n' "${GRN}" "${BOLD}" "${RST}"
 # Timers, deployed files, and syntax have been verified above.
 # Optional post-install verification:
 printf '%sOptional:%s\n' "${DIM}" "${RST}"
-printf '  Test email delivery:  sudo /usr/local/libexec/pb-maintenance/check-for-updates.sh --validate\n'
-printf '  Test email delivery:  sudo /usr/local/libexec/pb-maintenance/security-hardening-check.sh --validate\n'
+printf '  (1) sudo /usr/local/libexec/pb-maintenance/check-for-updates.sh --validate\n'
+printf '  (2) sudo /usr/local/libexec/pb-maintenance/security-hardening-check.sh --validate\n'
+printf '  (3) sudo /usr/local/bin/server-sanity-check\n'
+
