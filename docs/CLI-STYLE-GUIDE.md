@@ -24,6 +24,7 @@
 14. [Timing](#14-timing)
 15. [What the old scripts do differently](#15-what-the-old-scripts-do-differently)
 16. [Test runner output](#16-test-runner-output)
+17. [Component boundary banners](#17-component-boundary-banners)
 
 ---
 
@@ -543,3 +544,91 @@ New bash test harnesses must emit per-case lines in exactly this format so the w
 ```
 
 Two spaces before the keyword, two spaces after. The `test_login_compliance.sh` and `test_security_hardening.sh` harnesses already use this format (`pass()`/`fail()` functions). The `test_pb_patch_reporter.sh` harness uses single-space after the keyword (`_pass`/`_fail` functions) — both are matched by the `[[:space:]]+` quantifier in the regex.
+
+---
+
+## 17. Component boundary banners
+
+The top-level `install.sh` orchestrates multiple sub-installers. Each sub-installer produces its own full output stream — section headers, `_ok`/`_fail` lines, summary block — and without visual boundaries these blocks blur together, making it impossible to tell at a glance where one component ends and the next begins.
+
+Use `_component_open` / `_component_close` to wrap each sub-installer invocation with a full-width double-rule box. This is distinct from `_head`: `_head` is a section separator *within* a script; `_component_open`/`_component_close` are orchestration-level boundaries *between* scripts.
+
+### When to use
+
+Only in scripts that invoke other complete installers as sub-processes. Do not use `_component_open`/`_component_close` within a single installer's own sections — use `_head` there.
+
+### Visual structure
+
+```
+                                                         ← 3 blank lines
+═════════════════════════════  check-for-updates  ═════════════════════════════
+═══════════════════════════════════════════════════════════════════════════════
+  (sub-installer output — _head sections, _ok/_fail lines, its own Summary)
+═══════════════════════════════════════════════════════════════════════════════
+══════════════════════  ✔  check-for-updates complete  ════════════════════════
+  ✔  check-for-updates installed          ← orchestrator _ok, counted in parent Summary
+```
+
+- The top bar has the component name centred; the second bar is a plain full-width rule — together they form a box top.
+- The bottom bar is a plain full-width rule; the closing bar has the outcome centred — together they form a box bottom.
+- Box bars are always 79 characters wide (matching the file-header `=====` convention).
+- Top bar and plain rule are `BLU`/`BOLD`. Closing bar and outcome bar are `GRN`/`BOLD` on success, `RED`/`BOLD` on failure.
+- Three blank lines precede `_component_open` to create clear whitespace separation from previous output.
+
+### Implementation
+
+```bash
+# _component_open <label>
+# Prints three blank lines then a full-width double-rule box top with the
+# component name centred on the top bar.
+_component_open() {
+  local label="$1"
+  local total=79
+  local inner="  ${label}  "
+  local inner_len=${#inner}
+  local left=$(( (total - inner_len) / 2 ))
+  local right=$(( total - inner_len - left ))
+  local left_bar right_bar full_bar
+  printf -v left_bar  '%*s' "$left"  ''; left_bar="${left_bar// /═}"
+  printf -v right_bar '%*s' "$right" ''; right_bar="${right_bar// /═}"
+  printf -v full_bar  '%*s' "$total" ''; full_bar="${full_bar// /═}"
+
+  printf '\n\n\n'
+  printf '%s%s%s%s\n' "${BOLD}" "${BLU}" "${left_bar}${inner}${right_bar}" "${RST}"
+  printf '%s%s%s%s\n' "${BOLD}" "${BLU}" "${full_bar}" "${RST}"
+}
+
+# _component_close <label> <exit_code>
+# Prints a full-width double-rule box bottom with a pass/fail outcome line
+# centred on the bottom bar.  Pass the sub-installer's exit code as $2.
+_component_close() {
+  local label="$1" exit_code="$2"
+  local total=79
+  local inner colour
+  if (( exit_code == 0 )); then
+    inner="  ✔  ${label} complete  "
+    colour="${GRN}"
+  else
+    inner="  ✘  ${label} FAILED  "
+    colour="${RED}"
+  fi
+  local inner_len=${#inner}
+  local left=$(( (total - inner_len) / 2 ))
+  local right=$(( total - inner_len - left ))
+  local left_bar right_bar full_bar
+  printf -v left_bar  '%*s' "$left"  ''; left_bar="${left_bar// /═}"
+  printf -v right_bar '%*s' "$right" ''; right_bar="${right_bar// /═}"
+  printf -v full_bar  '%*s' "$total" ''; full_bar="${full_bar// /═}"
+
+  printf '%s%s%s%s\n' "${BOLD}" "${colour}" "${full_bar}" "${RST}"
+  printf '%s%s%s%s\n' "${BOLD}" "${colour}" "${left_bar}${inner}${right_bar}" "${RST}"
+}
+```
+
+### Placement
+
+Declare both functions at script scope alongside the other primitives (`_ok`, `_fail`, `_head`, `_die`). They use the same colour variables and follow the same TTY-guard pattern — no additional declarations needed.
+
+### Orchestrator `_ok` after close
+
+After `_component_close`, call `_ok "${component} installed"` (or `_fail`) at the orchestrator level. This records the component outcome in the parent Summary's PASS/FAIL count, giving the top-level summary a meaningful tally even though each sub-installer has its own counters.

@@ -46,6 +46,54 @@ _fail() { printf "  %s✘%s  %s\n" "${RED}" "${RST}" "$*"; (( ++_fail )); }
 _head() { printf "\n%s%s══ %s%s\n" "${BOLD}" "${BLU}" "$*" "${RST}"; }
 _die()  { printf "\n%s%sERROR:%s %s\n" "${BOLD}" "${RED}" "${RST}" "$*" >&2; exit 1; }
 
+# _component_open <label>
+# Prints three blank lines then a full-width double-rule box top with the
+# component name centred on the top bar.  Marks the start of a sub-installer
+# block so it is visually distinct from surrounding orchestrator output.
+_component_open() {
+  local label="$1"
+  local total=79
+  local inner="  ${label}  "
+  local inner_len=${#inner}
+  local left=$(( (total - inner_len) / 2 ))
+  local right=$(( total - inner_len - left ))
+  local left_bar right_bar full_bar
+  printf -v left_bar  '%*s' "$left"  ''; left_bar="${left_bar// /═}"
+  printf -v right_bar '%*s' "$right" ''; right_bar="${right_bar// /═}"
+  printf -v full_bar  '%*s' "$total" ''; full_bar="${full_bar// /═}"
+
+  printf '\n\n\n'
+  printf '%s%s%s%s\n' "${BOLD}" "${BLU}" "${left_bar}${inner}${right_bar}" "${RST}"
+  printf '%s%s%s%s\n' "${BOLD}" "${BLU}" "${full_bar}" "${RST}"
+}
+
+# _component_close <label> <exit_code>
+# Prints a full-width double-rule box bottom with a pass/fail outcome line
+# centred on the bottom bar.  Must be called after the sub-installer exits,
+# passing its exit code as $2.
+_component_close() {
+  local label="$1" exit_code="$2"
+  local total=79
+  local inner colour
+  if (( exit_code == 0 )); then
+    inner="  ✔  ${label} complete  "
+    colour="${GRN}"
+  else
+    inner="  ✘  ${label} FAILED  "
+    colour="${RED}"
+  fi
+  local inner_len=${#inner}
+  local left=$(( (total - inner_len) / 2 ))
+  local right=$(( total - inner_len - left ))
+  local left_bar right_bar full_bar
+  printf -v left_bar  '%*s' "$left"  ''; left_bar="${left_bar// /═}"
+  printf -v right_bar '%*s' "$right" ''; right_bar="${right_bar// /═}"
+  printf -v full_bar  '%*s' "$total" ''; full_bar="${full_bar// /═}"
+
+  printf '%s%s%s%s\n' "${BOLD}" "${colour}" "${full_bar}" "${RST}"
+  printf '%s%s%s%s\n' "${BOLD}" "${colour}" "${left_bar}${inner}${right_bar}" "${RST}"
+}
+
 # ── Guards ───────────────────────────────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
   printf "${RED}Error:${RST} must run as root — use: sudo bash %s\n" "$0" >&2
@@ -170,21 +218,37 @@ ensure_log_dirs() {
 # ── Component installer ──────────────────────────────────────────────────────
 # =============================================================================
 
+# run_component <component>
+# Wraps a component sub-installer with open/close boundary banners so its
+# output is visually isolated from orchestrator output.  On success, records
+# one _ok at the orchestrator level.  On failure, records one _fail and
+# returns 1 so the caller can decide whether to abort or continue.
 run_component() {
   local component="$1"
   local component_dir="${SCRIPT_DIR}/${component}"
 
-  _head "Component: ${component}"
+  _component_open "${component}"
 
-  [[ -d "$component_dir" ]] \
-    || { _fail "component directory not found: ${component_dir}"; return 1; }
-  [[ -f "${component_dir}/install.sh" ]] \
-    || { _fail "no install.sh found in: ${component_dir}"; return 1; }
+  local rc=0
+  if [[ ! -d "$component_dir" ]]; then
+    _fail "component directory not found: ${component_dir}"
+    _component_close "${component}" 1
+    return 1
+  fi
+  if [[ ! -f "${component_dir}/install.sh" ]]; then
+    _fail "no install.sh found in: ${component_dir}"
+    _component_close "${component}" 1
+    return 1
+  fi
 
-  if bash "${component_dir}/install.sh"; then
+  bash "${component_dir}/install.sh" || rc=$?
+
+  _component_close "${component}" "$rc"
+
+  if (( rc == 0 )); then
     _ok "${component} installed"
   else
-    _fail "${component} install.sh exited non-zero"
+    _fail "${component} install.sh exited ${rc}"
     return 1
   fi
 }
