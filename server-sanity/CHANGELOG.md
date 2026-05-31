@@ -27,6 +27,44 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.4.2] — 2026-05-31
+
+### Fixed
+
+- **Section 7 journal write:** `SANITY_CHECK_RESULT` was printed to stderr
+  only, which reaches the journal when launched by systemd but goes to the
+  terminal only on interactive runs.  The line is now also written via
+  `systemd-cat -t pb-server-sanity` so every run — interactive or scheduled —
+  populates the journal entry that the next run's self-check reads.
+- **Section 7 journal query:** changed from `-n 200` (line count limit) to
+  `--until <script-start-timestamp>` so the query always finds the previous
+  run's line rather than the current run's (which cannot be in the journal at
+  query time).  Derived from `$_START` (nanosecond timestamp captured at
+  script entry) converted to a wall-clock string via `date -d @`.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md` (this file)
+
+---
+
+## [1.4.1] — 2026-05-31
+
+### Fixed
+
+- **Section 7 journal query:** `journalctl -u pb-server-sanity-check` filters
+  by unit name and does not match process stderr output, which is tagged with
+  `SyslogIdentifier=pb-server-sanity`.  Changed to `journalctl -t pb-server-sanity`
+  so the `SANITY_CHECK_RESULT` line is found correctly.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md` (this file)
+
+---
+
 ## [1.3.2] — 2026-05-30
 
 ### Changed
