@@ -755,7 +755,7 @@ check_last_run pb-server-sanity-check.service
 # uses SuccessExitStatus=0 1, so a run with failures is still "success" at the
 # systemd level).  A missing journal line is a warning — expected on a freshly
 # provisioned host.
-_sanity_journal_line=$(journalctl -u pb-server-sanity-check --no-pager -n 200 2>/dev/null \
+_sanity_journal_line=$(journalctl -t pb-server-sanity --no-pager -n 200 2>/dev/null \
   | grep 'SANITY_CHECK_RESULT' | tail -1 || true)
 
 if [[ -z $_sanity_journal_line ]]; then
