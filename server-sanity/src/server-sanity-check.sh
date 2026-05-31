@@ -40,7 +40,7 @@
 # the section prints "not installed" and no counters are incremented.
 # =============================================================================
 
-set -euo pipefail
+set -Eeuo pipefail
 
 # ── Argument parsing ─────────────────────────────────────────────────────────
 _EMAIL_ON_FAILURE=0
@@ -80,13 +80,12 @@ _SECTION_START=0
 
 # ── Output capture for --email-on-failure ────────────────────────────────────
 # When the flag is set we tee all stdout to a temp file so the email body
-# is available after the run.  The file is cleaned up on EXIT.
+# is available after the run.  The file is cleaned up on EXIT via _trap_exit.
 _CAPTURE_FILE=''
 if (( _EMAIL_ON_FAILURE )); then
   _CAPTURE_FILE=$(mktemp /tmp/server-sanity-XXXXXX.txt)
   # Redirect stdout through tee; stderr goes to journal only (not emailed).
   exec > >(tee -a "$_CAPTURE_FILE")
-  trap 'rm -f "$_CAPTURE_FILE"' EXIT
 fi
 
 # ── Primitives ───────────────────────────────────────────────────────────────
@@ -120,7 +119,41 @@ _head() {
 }
 _skip() { printf "  ⊘  %s\n" "$*"; }
 
-# ── Guards ───────────────────────────────────────────────────────────────────
+# ── Traps ────────────────────────────────────────────────────────────────────
+# _ERR_HANDLED: not used by this script (no _die), but guards against re-entry
+#               if a future ERR fires after the trap itself encounters an error.
+# _EXIT_CLEAN:  set just before normal exit so _trap_exit is silent.
+_ERR_HANDLED=0
+_EXIT_CLEAN=0
+
+# Called indirectly: trap '_trap_err' ERR
+# shellcheck disable=SC2317
+_trap_err() {
+  local rc=$? line=${BASH_LINENO[0]} cmd="${BASH_COMMAND}"
+  (( _ERR_HANDLED )) && return
+  _ERR_HANDLED=1
+  local _end _ms
+  _end=$(date +%s%N)
+  _ms=$(( (_end - ${_START:-$_end}) / 1000000 ))
+  printf "\n%s%sERROR:%s unexpected failure at line %d (exit %d)\n" \
+    "${BOLD}" "${RED}" "${RST}" "$line" "$rc" >&2
+  printf "     %scommand: %s%s\n" "${DIM}" "$cmd" "${RST}" >&2
+  printf "     %s(after %dms)%s\n" "${DIM}" "$_ms" "${RST}" >&2
+}
+trap '_trap_err' ERR
+
+# Called indirectly: trap '_trap_exit' EXIT
+# shellcheck disable=SC2317
+_trap_exit() {
+  # Clean up capture file regardless of exit path
+  [[ -n "${_CAPTURE_FILE}" ]] && rm -f "${_CAPTURE_FILE}"
+  (( _EXIT_CLEAN )) && return
+  local _end _ms
+  _end=$(date +%s%N)
+  _ms=$(( (_end - ${_START:-$_end}) / 1000000 ))
+  printf "\n%s(exited after %dms)%s\n" "${DIM}" "$_ms" "${RST}" >&2
+}
+trap '_trap_exit' EXIT
 if [[ $EUID -ne 0 ]]; then
   printf "${RED}Error:${RST} must run as root — use: sudo bash %s\n" "$0" >&2
   exit 2
@@ -780,4 +813,14 @@ if (( _EMAIL_ON_FAILURE && _fail > 0 )); then
   fi
 fi
 
+# ── Journal log line ──────────────────────────────────────────────────────────
+# Emitted to stderr so it reaches the systemd journal but not the email body.
+# Grep-friendly for post-hoc queries:
+#   journalctl -u pb-server-sanity-check | grep SANITY_CHECK_RESULT
+_END=$(date +%s%N)
+_ELAPSED=$(( (_END - _START) / 1000000 ))
+printf 'SANITY_CHECK_RESULT pass=%d fail=%d warn=%d elapsed_ms=%d\n' \
+  "$_pass" "$_fail" "$_warn" "$_ELAPSED" >&2
+
+_EXIT_CLEAN=1
 exit "$_EXIT"

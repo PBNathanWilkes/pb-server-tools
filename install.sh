@@ -108,6 +108,7 @@ _run() {
 # _die <message> [hint]  — fatal error to stderr, then exit 1.
 # Optional second argument prints an indented remediation hint.
 _die() {
+  _ERR_HANDLED=1
   local msg="$1" hint="${2:-}"
   printf "\n%s%sERROR:%s %s\n" "${BOLD}" "${RED}" "${RST}" "${msg}" >&2
   if [[ -n "${hint}" ]]; then
@@ -153,6 +154,35 @@ _component_close() {
   printf '%s%s%s%s\n' "${BOLD}" "${colour}" "${full_bar}" "${RST}"
   printf '%s%s%s%s\n' "${BOLD}" "${colour}" "${left_bar}${inner}${right_bar}" "${RST}"
 }
+
+# ── Traps ────────────────────────────────────────────────────────────────────
+# _ERR_HANDLED: set by _die so the ERR trap does not double-print.
+# _EXIT_CLEAN:  set just before a normal summary exit so the EXIT trap is silent.
+_ERR_HANDLED=0
+_EXIT_CLEAN=0
+
+_trap_err() {
+  local rc=$? line=${BASH_LINENO[0]} cmd="${BASH_COMMAND}"
+  (( _ERR_HANDLED )) && return
+  _ERR_HANDLED=1
+  local _end _ms
+  _end=$(date +%s%N)
+  _ms=$(( (_end - ${_START:-$_end}) / 1000000 ))
+  printf "\n%s%sERROR:%s unexpected failure at line %d (exit %d)\n" \
+    "${BOLD}" "${RED}" "${RST}" "$line" "$rc" >&2
+  printf "     %scommand: %s%s\n" "${DIM}" "$cmd" "${RST}" >&2
+  printf "     %s(after %dms)%s\n" "${DIM}" "$_ms" "${RST}" >&2
+}
+trap '_trap_err' ERR
+
+_trap_exit() {
+  (( _EXIT_CLEAN )) && return
+  local _end _ms
+  _end=$(date +%s%N)
+  _ms=$(( (_end - ${_START:-$_end}) / 1000000 ))
+  printf "\n%s(exited after %dms)%s\n" "${DIM}" "$_ms" "${RST}" >&2
+}
+trap '_trap_exit' EXIT
 
 # ── Guards ───────────────────────────────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
@@ -349,6 +379,7 @@ if (( _fail > 0 )); then
   exit 1
 fi
 
+_EXIT_CLEAN=1
 printf '%s%sALL COMPONENTS INSTALLED%s\n\n' "${GRN}" "${BOLD}" "${RST}"
 
 printf 'Next steps:\n'

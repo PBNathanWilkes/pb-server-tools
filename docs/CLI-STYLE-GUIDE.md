@@ -25,6 +25,7 @@
 15. [What the old scripts do differently](#15-what-the-old-scripts-do-differently)
 16. [Test runner output](#16-test-runner-output)
 17. [Component boundary banners](#17-component-boundary-banners)
+18. [ERR and EXIT traps](#18-err-and-exit-traps)
 
 ---
 
@@ -722,3 +723,102 @@ Declare both functions at script scope alongside the other primitives (`_ok`, `_
 ### Orchestrator `_ok` after close
 
 After `_component_close`, call `_ok "${component} installed"` (or `_fail`) at the orchestrator level. This records the component outcome in the parent Summary's PASS/FAIL count, giving the top-level summary a meaningful tally even though each sub-installer has its own counters.
+
+---
+
+## 18. ERR and EXIT traps
+
+### Purpose
+
+`set -e` aborts the script on any unchecked non-zero exit, but does so silently — the operator sees only a bare process death with no context. Two named trap functions convert unexpected failures into structured output and ensure elapsed time is always reported.
+
+### When to use
+
+All scripts that set `set -Eeuo pipefail` (the `E` flag is required to propagate the ERR trap into functions). Check-only scripts and installers both use it. The `E` flag is the difference between `set -euo pipefail` (old) and `set -Eeuo pipefail` (new).
+
+### Design
+
+Two flags coordinate the traps:
+
+- `_ERR_HANDLED` — set to `1` inside `_die` so the ERR trap does not double-print when `_die` is the cause of the exit.
+- `_EXIT_CLEAN` — set to `1` immediately before the final success exit so the EXIT trap is silent on a clean run.
+
+### Implementation
+
+```bash
+# ── Traps ────────────────────────────────────────────────────────────────────
+_ERR_HANDLED=0
+_EXIT_CLEAN=0
+
+# Called indirectly: trap '_trap_err' ERR
+# shellcheck disable=SC2317
+_trap_err() {
+  local rc=$? line=${BASH_LINENO[0]} cmd="${BASH_COMMAND}"
+  (( _ERR_HANDLED )) && return
+  _ERR_HANDLED=1
+  local _end _ms
+  _end=$(date +%s%N)
+  _ms=$(( (_end - ${_START:-$_end}) / 1000000 ))
+  printf "\n%s%sERROR:%s unexpected failure at line %d (exit %d)\n" \
+    "${BOLD}" "${RED}" "${RST}" "$line" "$rc" >&2
+  printf "     %scommand: %s%s\n" "${DIM}" "$cmd" "${RST}" >&2
+  printf "     %s(after %dms)%s\n" "${DIM}" "$_ms" "${RST}" >&2
+}
+trap '_trap_err' ERR
+
+# Called indirectly: trap '_trap_exit' EXIT
+# shellcheck disable=SC2317
+_trap_exit() {
+  (( _EXIT_CLEAN )) && return
+  local _end _ms
+  _end=$(date +%s%N)
+  _ms=$(( (_end - ${_START:-$_end}) / 1000000 ))
+  printf "\n%s(exited after %dms)%s\n" "${DIM}" "$_ms" "${RST}" >&2
+}
+trap '_trap_exit' EXIT
+```
+
+`_die` must set `_ERR_HANDLED=1` as its first statement, before the `exit 1`, so the ERR trap does not fire a second time:
+
+```bash
+_die() {
+  _ERR_HANDLED=1
+  local msg="$1" hint="${2:-}"
+  ...
+  exit 1
+}
+```
+
+`_EXIT_CLEAN=1` is set immediately before the final success `exit` or fall-through at the end of the summary block — not before `exit 1` on failure, so the EXIT trap still prints elapsed on a failed run.
+
+### `_CAPTURE_FILE` coexistence (check scripts)
+
+Scripts that register a `trap ... EXIT` for temp file cleanup must fold that cleanup into `_trap_exit` rather than registering a second EXIT trap. `_trap_exit` checks `_CAPTURE_FILE` directly:
+
+```bash
+_trap_exit() {
+  [[ -n "${_CAPTURE_FILE}" ]] && rm -f "${_CAPTURE_FILE}"
+  (( _EXIT_CLEAN )) && return
+  ...elapsed print...
+}
+```
+
+### Journal log line (check scripts only)
+
+Scripts running under systemd should emit a single grep-friendly structured line to stderr at the end of every run, regardless of outcome. This lets the operator query the journal without parsing colour-stripped prose output:
+
+```bash
+journalctl -u pb-server-sanity-check | grep SANITY_CHECK_RESULT
+```
+
+Emit it just before `_EXIT_CLEAN=1` and the final exit:
+
+```bash
+printf 'SANITY_CHECK_RESULT pass=%d fail=%d warn=%d elapsed_ms=%d\n' \
+  "$_pass" "$_fail" "$_warn" "$_ELAPSED" >&2
+
+_EXIT_CLEAN=1
+exit "$_EXIT"
+```
+
+The line goes to stderr so it reaches the journal but not the `--email-on-failure` body, which is captured from stdout only.
