@@ -4,6 +4,29 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.4.0] — 2026-05-31
+
+### Added
+
+- **Section 7 — Server Sanity Check (self):** the script now audits its own
+  deployment and scheduled-run health.  Checks:
+  - Deployed binary present at `/usr/local/bin/server-sanity-check` with
+    expected permissions (0755 root:root).
+  - `pb-server-sanity-check.timer` active with next trigger time.
+  - `pb-server-sanity-check.service` last run result (via `check_last_run`).
+  - `SANITY_CHECK_RESULT` journal line from the most recent run, parsed for
+    pass/fail/warn counts.  The unit uses `SuccessExitStatus=0 1` so systemd
+    always sees success — this check surfaces run-level failures that would
+    otherwise be invisible.  A missing journal line (new host / journal
+    rotated) is reported as a warning.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md` (this file)
+
+---
+
 ## [1.3.2] — 2026-05-30
 
 ### Changed

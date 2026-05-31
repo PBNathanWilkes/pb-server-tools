@@ -34,6 +34,7 @@
 #   • SharePoint Export  (/opt/sharepoint-export)  — skipped if not installed
 #   • Server Tools       (/usr/local/libexec/pb-maintenance)
 #   • lighttpd                                      — skipped if not installed
+#   • Server Sanity Check (self)                   — always checked
 #
 # Optional sections (2–4, 6) are guarded: sections 2–4 by their /opt install
 # root; section 6 (lighttpd) by binary presence.  If the sentinel is absent
@@ -731,6 +732,47 @@ if command -v lighttpd >/dev/null 2>&1; then
 
 else
   _skip "lighttpd not installed on this host"
+fi
+
+
+# =============================================================================
+# ── SECTION 7: Server Sanity Check (self) ────────────────────────────────────
+# =============================================================================
+_head "Server Sanity Check (self)"
+
+SANITY_BIN=/usr/local/bin/server-sanity-check
+
+check_file "$SANITY_BIN" "server-sanity-check binary"
+if [[ -f $SANITY_BIN ]]; then
+  check_file_mode "$SANITY_BIN" 755 root
+fi
+
+check_timer    pb-server-sanity-check.timer
+check_last_run pb-server-sanity-check.service
+
+# Parse the SANITY_CHECK_RESULT journal line from the most recent completed
+# run to detect check-level failures that systemd does not surface (the unit
+# uses SuccessExitStatus=0 1, so a run with failures is still "success" at the
+# systemd level).  A missing journal line is a warning — expected on a freshly
+# provisioned host.
+_sanity_journal_line=$(journalctl -u pb-server-sanity-check --no-pager -n 200 2>/dev/null \
+  | grep 'SANITY_CHECK_RESULT' | tail -1 || true)
+
+if [[ -z $_sanity_journal_line ]]; then
+  _warn "last run journal: no SANITY_CHECK_RESULT line found (new host or journal rotated)"
+else
+  _sanity_fail_count=$(echo "$_sanity_journal_line" | grep -oE 'fail=[0-9]+' | cut -d= -f2 || echo "?")
+  _sanity_warn_count=$(echo "$_sanity_journal_line" | grep -oE 'warn=[0-9]+' | cut -d= -f2 || echo "?")
+  _sanity_pass_count=$(echo "$_sanity_journal_line" | grep -oE 'pass=[0-9]+' | cut -d= -f2 || echo "?")
+  _sanity_elapsed=$(   echo "$_sanity_journal_line" | grep -oE 'elapsed_ms=[0-9]+' | cut -d= -f2 || echo "?")
+
+  if [[ $_sanity_fail_count == "0" ]]; then
+    _ok  "last run checks: pass=${_sanity_pass_count} fail=${_sanity_fail_count} warn=${_sanity_warn_count}  (${_sanity_elapsed}ms)"
+  else
+    _fail "last run checks: pass=${_sanity_pass_count} fail=${_sanity_fail_count} warn=${_sanity_warn_count}  (${_sanity_elapsed}ms)"
+    _note "The last scheduled run detected ${_sanity_fail_count} failure(s) — review the journal:"
+    _note "  journalctl -u pb-server-sanity-check --no-pager | tail -100"
+  fi
 fi
 
 
