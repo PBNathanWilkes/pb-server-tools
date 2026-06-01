@@ -8,10 +8,17 @@
 # What it does:
 #   1. Verifies prerequisites
 #   2. Deploys server-sanity-check to /usr/local/bin/
+#   2a. Deploys per-host override config to /etc/server-tools/ if present
 #   3. Deploys systemd service + timer (pb-server-sanity-check)
 #   4. Verifies deployed files match source; aborts if any differ
 #   5. Reloads systemd and enables the timer
 #   6. Runs a smoke test (syntax check)
+#
+# Per-host config:
+#   overrides/<hostname>/server-sanity.conf in the repo is copied to
+#   /etc/server-tools/server-sanity.conf on install.  If no override file
+#   exists for this host the step is skipped with a warning — the runtime
+#   check will warn that group membership is unconfigured.
 #
 # Options:
 #   --dry-run   Print what would be done; mutate nothing
@@ -21,6 +28,7 @@
 #
 # Production layout:
 #   /usr/local/bin/server-sanity-check       (0755 root:root)
+#   /etc/server-tools/server-sanity.conf     (0644 root:root, if override exists)
 #   /etc/systemd/system/pb-server-sanity-check.service
 #   /etc/systemd/system/pb-server-sanity-check.timer
 #
@@ -39,6 +47,10 @@ readonly SYSTEMD_SRC="${SCRIPT_DIR}/systemd"
 readonly BIN_DIR="/usr/local/bin"
 readonly DEST="${BIN_DIR}/server-sanity-check"
 readonly SYSTEMD_DEST="/etc/systemd/system"
+readonly CONF_DEST_DIR="/etc/server-tools"
+readonly CONF_DEST="${CONF_DEST_DIR}/server-sanity.conf"
+OVERRIDES_SRC="${SCRIPT_DIR}/../overrides/$(hostname -s)/server-sanity.conf"
+readonly OVERRIDES_SRC
 
 readonly SERVICES=(
   pb-server-sanity-check.service
@@ -233,6 +245,34 @@ deploy_script() {
 }
 
 # =============================================================================
+# ── STEP 2a: Deploy per-host override config ──────────────────────────────────
+# =============================================================================
+
+deploy_override_conf() {
+  _head "Per-host override config"
+
+  if [[ ! -f $OVERRIDES_SRC ]]; then
+    _warn "no override config for $(hostname -s)  (${OVERRIDES_SRC} not found)"
+    _note "Create overrides/$(hostname -s)/server-sanity.conf in the repo to"
+    _note "configure MSMTP_GROUP_MEMBERS for this host.  msmtp group membership"
+    _note "checks will warn at runtime until the file is deployed."
+    return
+  fi
+
+  if (( _DRY_RUN )); then
+    printf "     %s[dry-run] mkdir -p %s%s\n" "${DIM}" "${CONF_DEST_DIR}" "${RST}"
+    printf "     %s[dry-run] install -m 0644 %s → %s%s\n" \
+      "${DIM}" "${OVERRIDES_SRC}" "${CONF_DEST}" "${RST}"
+    _ok "${CONF_DEST}"
+    return
+  fi
+
+  _run "create ${CONF_DEST_DIR}"  mkdir -p "${CONF_DEST_DIR}"
+  _run "${CONF_DEST}" \
+    install -m 0644 -o root -g root "${OVERRIDES_SRC}" "${CONF_DEST}"
+}
+
+# =============================================================================
 # ── STEP 3: Deploy systemd units ─────────────────────────────────────────────
 # =============================================================================
 
@@ -277,6 +317,18 @@ verify_files() {
     (( mismatches++ )) || true
   else
     _ok "${DEST}"
+  fi
+
+  # Config file — only verify if an override exists for this host.
+  # A missing override is already warned in deploy_override_conf; no double-count.
+  if [[ -f $OVERRIDES_SRC ]]; then
+    if ! diff -q "${OVERRIDES_SRC}" "${CONF_DEST}" >/dev/null 2>&1; then
+      _fail "${CONF_DEST} — differs from source"
+      _note "diff ${OVERRIDES_SRC} ${CONF_DEST}"
+      (( mismatches++ )) || true
+    else
+      _ok "${CONF_DEST}"
+    fi
   fi
 
   local unit
@@ -350,6 +402,7 @@ smoke_test() {
 
 check_prereqs
 deploy_script
+deploy_override_conf
 deploy_units
 verify_files
 reload_systemd

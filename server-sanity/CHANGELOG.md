@@ -8,20 +8,37 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- **Section 1 — msmtp group membership checks:** new `check_group_member`
+- **msmtp group membership checks (Section 1):** new `check_group_member`
   helper verifies that every service account that sends email is a member of
-  the `msmtp` system group.  Without membership msmtp fails silently — no
-  log entry, no error output, delivery just does not happen.  Accounts
-  checked: `nathan`, `emaildns`, `balena-monitor`, `golan`, `sp-export`.
-  Each failure includes a remediation note (`usermod -aG msmtp <user>`).
-  The helper also catches the case where the `msmtp` group does not exist at
-  all.  Membership is checked via both `getent group` field 4 (supplementary
-  groups) and `id -nG` (primary group) so no assignment path is missed.
+  the `msmtp` system group.  Without membership msmtp exits silently — no log
+  entry, no error output.  The set of accounts is host-specific and driven by
+  `/etc/server-tools/server-sanity.conf` (deployed by `install.sh` from
+  `overrides/<hostname>/server-sanity.conf` in the repo).  If the config file
+  is absent or `MSMTP_GROUP_MEMBERS` is empty, the check emits a `_warn`
+  rather than failing — missing config is not itself a breakage.  Each
+  membership failure includes a remediation note (`usermod -aG msmtp <user>`).
+  The helper checks both supplementary groups (via `getent group` field 4)
+  and primary group (via `id -nG`) so no assignment path is missed.
+- **`overrides/pblinuxutility/server-sanity.conf`:** initial override config
+  for pblinuxutility declaring `MSMTP_GROUP_MEMBERS=(nathan emaildns
+  balena-monitor golan sp-export)`.
+
+### Changed
+
+- **`install.sh`** — new Step 2a deploys `overrides/<hostname>/server-sanity.conf`
+  to `/etc/server-tools/server-sanity.conf` (0644 root:root) when an override
+  exists for the current host.  If no override is present for this host the
+  step warns and continues — absence is not a hard failure.  Verify step
+  extended to diff the deployed config against source when applicable.
+  Header and production layout comments updated.
 
 ### Files changed
 
 - `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/install.sh`
 - `server-sanity/CHANGELOG.md` (this file)
+- `overrides/pblinuxutility/server-sanity.conf` — new
+- `docs/CHANGELOG.md` (repo)
 
 ---
 

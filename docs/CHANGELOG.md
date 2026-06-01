@@ -4,6 +4,28 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.18] — 2026-06-01
+
+### Changed
+
+- `server-sanity` v1.5.0: msmtp group membership checks with per-host
+  override config.  New `check_group_member` helper in
+  `server-sanity-check.sh`; accounts read from
+  `/etc/server-tools/server-sanity.conf` (deployed by `install.sh` from
+  `overrides/<hostname>/server-sanity.conf`).  Initial override for
+  pblinuxutility added.  `install.sh` extended with Step 2a to deploy the
+  config file.  See `server-sanity/CHANGELOG.md` for full detail.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/install.sh`
+- `server-sanity/CHANGELOG.md`
+- `overrides/pblinuxutility/server-sanity.conf` — new
+- `docs/CHANGELOG.md` (this file)
+
+---
+
 ## [1.0.17] — 2026-05-30
 
 ### Changed

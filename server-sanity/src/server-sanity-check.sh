@@ -481,14 +481,28 @@ else
 fi
 
 
-# msmtp group membership — every account that sends email must be in the
-# msmtp group; without it msmtp exits silently with a permission error and
-# no log entry is written.
-check_group_member msmtp nathan
-check_group_member msmtp emaildns
-check_group_member msmtp balena-monitor
-check_group_member msmtp golan
-check_group_member msmtp sp-export
+# msmtp group membership — sourced from /etc/server-tools/server-sanity.conf.
+# Without msmtp group membership the binary exits silently with a permission
+# error and no log entry is written.
+# The config file is installed by server-sanity/install.sh from
+# overrides/<hostname>/server-sanity.conf in the repo.
+MSMTP_GROUP_MEMBERS=()
+_SANITY_CONF=/etc/server-tools/server-sanity.conf
+if [[ -f $_SANITY_CONF ]]; then
+  # shellcheck source=/dev/null
+  source "$_SANITY_CONF"
+  if (( ${#MSMTP_GROUP_MEMBERS[@]} == 0 )); then
+    _warn "msmtp group members: config present but MSMTP_GROUP_MEMBERS is empty"
+    _note "Edit ${_SANITY_CONF} and add the accounts that send email on this host"
+  else
+    for _member in "${MSMTP_GROUP_MEMBERS[@]}"; do
+      check_group_member msmtp "$_member"
+    done
+  fi
+else
+  _warn "msmtp group members: ${_SANITY_CONF} not found — group membership unchecked"
+  _note "Deploy: sudo bash server-sanity/install.sh  (from the repo root)"
+fi
 
 
 # =============================================================================
