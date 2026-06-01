@@ -4,6 +4,23 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.19] — 2026-06-01
+
+### Fixed
+
+- `server-sanity` v1.5.1: hardened `install.sh` verify step so a missing
+  `CONF_DEST` is always caught regardless of whether the override source was
+  present at install time.  Previously a stale server (installer run before
+  repo sync) produced `WARN: 0  FAIL: 0` with the config silently undeployed.
+
+### Files changed
+
+- `server-sanity/install.sh`
+- `server-sanity/CHANGELOG.md`
+- `docs/CHANGELOG.md` (this file)
+
+---
+
 ## [1.0.18] — 2026-06-01
 
 ### Changed

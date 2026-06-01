@@ -4,6 +4,28 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.5.1] — 2026-06-01
+
+### Fixed
+
+- **`install.sh` verify step:** the config file verification block was gated
+  on `[[ -f $OVERRIDES_SRC ]]`, so when the override source was absent from
+  the server (e.g. installer run before `st` sync completed), both the deploy
+  step and the verify step silently passed — `CONF_DEST` was never written and
+  no counter was incremented.  Fixed by splitting verify into two cases:
+  (1) source present → `_fail` if `CONF_DEST` is missing or differs from
+  source; (2) source absent → `_ok` if a previously-deployed config exists,
+  `_warn` if neither source nor deployed file is present.  This ensures a
+  stale or incomplete deploy is always surfaced.
+
+### Files changed
+
+- `server-sanity/install.sh`
+- `server-sanity/CHANGELOG.md` (this file)
+- `docs/CHANGELOG.md` (repo)
+
+---
+
 ## [1.5.0] — 2026-06-01
 
 ### Added

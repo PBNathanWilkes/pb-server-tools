@@ -319,15 +319,29 @@ verify_files() {
     _ok "${DEST}"
   fi
 
-  # Config file — only verify if an override exists for this host.
-  # A missing override is already warned in deploy_override_conf; no double-count.
+  # Config file verification.
+  # Case 1: override source present — deployed file must exist and match.
+  # Case 2: override source absent — deployed file should still exist from a
+  #         prior install; warn if it doesn't so the operator knows group
+  #         membership checks will be skipped at runtime.
   if [[ -f $OVERRIDES_SRC ]]; then
-    if ! diff -q "${OVERRIDES_SRC}" "${CONF_DEST}" >/dev/null 2>&1; then
+    if [[ ! -f $CONF_DEST ]]; then
+      _fail "${CONF_DEST} — not deployed  (override source present but file missing)"
+      _note "Re-run: sudo bash ${SCRIPT_DIR}/install.sh"
+      (( mismatches++ )) || true
+    elif ! diff -q "${OVERRIDES_SRC}" "${CONF_DEST}" >/dev/null 2>&1; then
       _fail "${CONF_DEST} — differs from source"
       _note "diff ${OVERRIDES_SRC} ${CONF_DEST}"
       (( mismatches++ )) || true
     else
       _ok "${CONF_DEST}"
+    fi
+  else
+    if [[ -f $CONF_DEST ]]; then
+      _ok "${CONF_DEST}  (no source override — using previously deployed config)"
+    else
+      _warn "${CONF_DEST} not present — msmtp group membership will be unchecked at runtime"
+      _note "Create overrides/$(hostname -s)/server-sanity.conf in the repo and re-run install"
     fi
   fi
 
