@@ -250,6 +250,28 @@ check_symlink_target() {
   fi
 }
 
+# check_group_member <group> <user>
+# Fails if <user> is not a member of <group>.
+# Also fails if the group itself does not exist.
+check_group_member() {
+  local group=$1 user=$2
+  if ! getent group "$group" >/dev/null 2>&1; then
+    _fail "group membership: group '$group' does not exist"
+    return
+  fi
+  local members
+  members=$(getent group "$group" | cut -d: -f4)
+  # getent group returns comma-separated members in field 4; also check
+  # primary group via id so users whose primary GID is msmtp are not missed.
+  if echo ",$members," | grep -q ",${user}," 2>/dev/null \
+      || id -nG "$user" 2>/dev/null | tr ' ' '\n' | grep -qx "$group"; then
+    _ok  "group membership: $user ∈ $group"
+  else
+    _fail "group membership: $user not in $group  (emails will fail silently)"
+    _note "Fix: sudo usermod -aG ${group} ${user}  (then re-login or newgrp)"
+  fi
+}
+
 # check_conf_keys <config_file> <key1> [key2 ...]
 # Sources the config once and checks every key for non-empty value.
 # Config values are NEVER printed.
@@ -457,6 +479,16 @@ if [[ -d $MSMTP_LOG_DIR ]]; then
 else
   _warn "msmtp log dir not found: $MSMTP_LOG_DIR  (created on first send)"
 fi
+
+
+# msmtp group membership — every account that sends email must be in the
+# msmtp group; without it msmtp exits silently with a permission error and
+# no log entry is written.
+check_group_member msmtp nathan
+check_group_member msmtp emaildns
+check_group_member msmtp balena-monitor
+check_group_member msmtp golan
+check_group_member msmtp sp-export
 
 
 # =============================================================================
