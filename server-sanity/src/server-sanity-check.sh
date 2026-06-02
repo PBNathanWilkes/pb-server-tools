@@ -782,7 +782,32 @@ fi
 
 
 # =============================================================================
-# ── SECTION 7: Server Sanity Check (self) ────────────────────────────────────
+# ── SECTION 7: System tools ──────────────────────────────────────────────────
+# =============================================================================
+_head "System tools"
+
+# apt-managed tools
+for _pkg in pandoc wkhtmltopdf; do
+  if /usr/bin/dpkg-query -W -f='${Status}' "$_pkg" 2>/dev/null | /bin/grep -q "install ok installed"; then
+    _ok "apt package:  ${_pkg}  ($(/usr/bin/dpkg-query -W -f='${Version}' "$_pkg" 2>/dev/null))"
+  else
+    _fail "apt package missing: ${_pkg}"
+    _note "Fix: sudo apt-get install ${_pkg}"
+  fi
+done
+
+# snap-managed tools
+if ! /usr/bin/snap list glow >/dev/null 2>&1; then
+  _fail "snap package missing: glow"
+  _note "Fix: sudo snap install glow"
+else
+  _glow_ver=$(/usr/bin/snap list glow 2>/dev/null | /usr/bin/awk 'NR==2 {print $2}')
+  _ok "snap package:  glow  (${_glow_ver})"
+fi
+
+
+# =============================================================================
+# ── SECTION 8: Server Sanity Check (self) ────────────────────────────────────
 # =============================================================================
 _head "Server Sanity Check (self)"
 

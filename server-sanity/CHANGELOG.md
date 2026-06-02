@@ -4,6 +4,23 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.6.0] — 2026-06-02
+
+### Added
+
+- **Section 7 — System tools:** new section checks that `pandoc` and
+  `wkhtmltopdf` are installed via apt and that `glow` is installed via snap.
+  Each missing package emits `_fail` with the install command as a `_note`.
+  Present packages report their installed version.  Former Section 7 (self)
+  renumbered to Section 8.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md` (this file)
+
+---
+
 ## [1.5.1] — 2026-06-01
 
 ### Fixed
