@@ -4,6 +4,29 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.6.1] — 2026-06-03
+
+### Added
+
+- **Section 2 — Email DNS Monitor: `last_run.json` checks:** EDM v2.15.27
+  writes `/var/lib/email-dns-monitor/last_run.json` unconditionally at the
+  end of every `--run` cycle.  Four new checks added after `check_no_lockfile`:
+  (1) file exists — `_fail` if absent;
+  (2) valid JSON — `_fail` if not;
+  (3) mtime ≤ 90 minutes (5400 s) — `_fail` if stale;
+  (4) `exit_code` is 0, 2, or 3 — `_fail` on any other value.
+  On a clean run the `_ok` line surfaces `confirmed_count` and
+  `failure_count` from the JSON for visibility.  Uses the `$(( ))` age
+  pattern already established by `check_no_lockfile`; no new helper
+  functions introduced.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md` (this file)
+
+---
+
 ## [1.6.0] — 2026-06-02
 
 ### Added

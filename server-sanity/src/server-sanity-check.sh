@@ -548,6 +548,40 @@ if [[ -d $EDM_INSTALL ]]; then
 
   check_no_lockfile "${EDM_STATE}/monitor.lock"
 
+  # last_run.json — written unconditionally at the end of every --run cycle
+  # (EDM v2.15.27+).  Confirms the service ran recently and exited cleanly.
+  _EDM_LAST_RUN=${EDM_STATE}/last_run.json
+
+  if [[ ! -f $_EDM_LAST_RUN ]]; then
+    _fail "last_run.json missing: ${_EDM_LAST_RUN}  (EDM v2.15.27+ required)"
+  else
+    # Assert valid JSON
+    if ! jq -e . "$_EDM_LAST_RUN" >/dev/null 2>&1; then
+      _fail "last_run.json: invalid JSON — ${_EDM_LAST_RUN}"
+    else
+      # Assert mtime ≤ 90 minutes (5400 seconds)
+      _edm_age=$(( $(date +%s) - $(stat -c '%Y' "$_EDM_LAST_RUN" 2>/dev/null || echo 0) ))
+      if (( _edm_age > 5400 )); then
+        _fail "last_run.json: stale  (age: ${_edm_age}s — expected within 5400s/90min)"
+        _note "Check email-dns-monitor.timer is active and the last service run succeeded"
+      else
+        # Assert exit_code is 0, 2, or 3 (all other values indicate an unexpected failure)
+        _edm_exit=$(jq -r '.exit_code' "$_EDM_LAST_RUN" 2>/dev/null || echo "?")
+        case "$_edm_exit" in
+          0|2|3)
+            _edm_confirmed=$(jq -r '.confirmed_count' "$_EDM_LAST_RUN" 2>/dev/null || echo "?")
+            _edm_failures=$( jq -r '.failure_count'   "$_EDM_LAST_RUN" 2>/dev/null || echo "?")
+            _ok "last_run.json: age ${_edm_age}s  exit_code=${_edm_exit}  confirmed=${_edm_confirmed}  failures=${_edm_failures}"
+            ;;
+          *)
+            _fail "last_run.json: unexpected exit_code=${_edm_exit}  (expected 0, 2, or 3)"
+            _note "Review: journalctl -u email-dns-monitor.service --no-pager | tail -50"
+            ;;
+        esac
+      fi
+    fi
+  fi
+
   check_conf_keys "$EDM_CONF" \
     ALERT_EMAILS SUMMARY_EMAILS MAIL_TRANSPORT OBSERVATION_MINUTES \
     PARALLEL_QUERIES MAX_ALERTS_PER_RUN DNS_FAILURE_ALERT_THRESHOLD \
