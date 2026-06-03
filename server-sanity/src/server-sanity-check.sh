@@ -550,22 +550,33 @@ if [[ -d $EDM_INSTALL ]]; then
   #             most-recent mtime > 48 h → _fail (service stale or backups broken);
   #             most-recent mtime > 25 h → _warn (missed at least one daily window);
   #             otherwise → _ok.
+  # Count archives.  Use || true so pipefail does not fire when find exits
+  # non-zero (e.g. a transient permission warning on a subdirectory).
+  # Trim whitespace from wc -l output before integer comparison.
   _edm_archive_count=0
   _edm_archive_count=$(sudo -u emaildns find "$EDM_BACKUP" \
     -maxdepth 1 -name 'email-dns-monitor-state-*.tar.gz' \
-    2>/dev/null | wc -l || echo 0)
+    2>/dev/null | wc -l || true)
+  _edm_archive_count="${_edm_archive_count//[[:space:]]/}"
+  # Coerce to 0 if empty or non-numeric (e.g. find failed entirely)
+  [[ $_edm_archive_count =~ ^[0-9]+$ ]] || _edm_archive_count=0
 
   if (( _edm_archive_count == 0 )); then
     _fail "backup archives: none found in ${EDM_BACKUP}  (expected ≥1 state archive)"
     _note "Check email-dns-monitor.timer is active and has completed at least one run"
   else
     # Find the most-recent archive mtime via find -printf; newest first, take top line.
+    # || true: same pipefail guard as the count pipeline above.
     _edm_newest_mtime=$(sudo -u emaildns find "$EDM_BACKUP" \
       -maxdepth 1 -name 'email-dns-monitor-state-*.tar.gz' \
       -printf '%T@\n' 2>/dev/null \
-      | sort -rn | head -1 || echo 0)
-    # Strip fractional seconds for integer arithmetic
-    _edm_newest_mtime=${_edm_newest_mtime%%.*}
+      | sort -rn | head -1 || true)
+    # Strip fractional seconds and whitespace for integer arithmetic.
+    # If empty (find produced no -printf output), default to 0 so the age
+    # calculation yields a very large value and falls through to _fail.
+    _edm_newest_mtime="${_edm_newest_mtime%%.*}"
+    _edm_newest_mtime="${_edm_newest_mtime//[[:space:]]/}"
+    [[ $_edm_newest_mtime =~ ^[0-9]+$ ]] || _edm_newest_mtime=0
     _edm_archive_age=$(( $(date +%s) - _edm_newest_mtime ))
 
     if   (( _edm_archive_age > 172800 )); then

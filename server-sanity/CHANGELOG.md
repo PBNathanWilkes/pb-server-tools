@@ -4,6 +4,28 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.6.4] — 2026-06-03
+
+### Fixed
+
+- **Section 2 — backup archive recency: `|| echo 0` pipefail interaction:**
+  under `set -Eeuo pipefail`, when `find` exits non-zero (e.g. a transient
+  permission warning on a subdirectory), pipefail causes the `find | wc -l`
+  pipeline to exit non-zero.  The original `|| echo 0` then fires, appending
+  `0` to the already-captured count — producing a value like `82\n0` that
+  causes `(( _edm_archive_count == 0 ))` to abort with a syntax error.  The
+  same race applies to the mtime pipeline.
+  Fixed by replacing `|| echo 0` with `|| true` on both pipelines, then
+  stripping whitespace (`${var//[[:space:]]/}`) and coercing non-numeric
+  values to `0` via a regex guard before any arithmetic.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md` (this file)
+
+---
+
 ## [1.6.3] — 2026-06-03
 
 ### Added
