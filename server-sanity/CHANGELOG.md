@@ -4,6 +4,34 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.6.3] — 2026-06-03
+
+### Added
+
+- **Section 2 — Email DNS Monitor: directory ownership checks:** three
+  `check_dir_owner` calls added for directories that were previously checked
+  for existence only:
+  - `$EDM_LOG` (`/var/log/email-dns-monitor`) — `emaildns` owner expected.
+  - `$EDM_BACKUP` (`/var/backups/email-dns-monitor`) — `emaildns` owner expected.
+  - `$EDM_BACKUP/history` — `emaildns` owner expected.
+- **Section 2 — Email DNS Monitor: backup archive recency check:** after the
+  `$EDM_BACKUP` ownership check, counts state archives matching
+  `email-dns-monitor-state-*.tar.gz` and checks the most-recent archive mtime.
+  All `find` calls use `sudo -u emaildns` because the directory is `0700
+  emaildns:emaildns` and root cannot read it directly.  Thresholds:
+  - count = 0 → `_fail` (no archives ever written)
+  - most-recent > 48 h → `_fail` (service stale or backup broken)
+  - most-recent > 25 h → `_warn` (missed at least one daily run window)
+  - otherwise → `_ok` with count and age
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md` (this file)
+- `server-sanity/OPEN-ITEM-edm-install-backup-find-root.md` — new
+
+---
+
 ## [1.6.2] — 2026-06-03
 
 ### Fixed

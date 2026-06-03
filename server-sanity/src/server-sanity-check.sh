@@ -537,9 +537,50 @@ if [[ -d $EDM_INSTALL ]]; then
   check_dir  "$EDM_STATE/history"   "state/history"
   check_dir  "$EDM_STATE/domains"   "state/domains"
   check_dir_owner "$EDM_STATE"  emaildns
-  check_dir  "$EDM_LOG"             "log dir"
-  check_dir  "$EDM_BACKUP"          "backup dir"
-  check_dir  "$EDM_BACKUP/history"  "backup/history"
+  check_dir       "$EDM_LOG"             "log dir"
+  check_dir_owner "$EDM_LOG"        emaildns
+  check_dir       "$EDM_BACKUP"          "backup dir"
+  check_dir_owner "$EDM_BACKUP"     emaildns
+
+  # Backup archive recency — EDM writes email-dns-monitor-state-*.tar.gz to
+  # $EDM_BACKUP on each run.  The directory is 0700 emaildns:emaildns so root
+  # cannot stat it directly; all find calls must use sudo -u emaildns.
+  #
+  # Thresholds: count = 0 → _fail (no archives ever written);
+  #             most-recent mtime > 48 h → _fail (service stale or backups broken);
+  #             most-recent mtime > 25 h → _warn (missed at least one daily window);
+  #             otherwise → _ok.
+  _edm_archive_count=0
+  _edm_archive_count=$(sudo -u emaildns find "$EDM_BACKUP" \
+    -maxdepth 1 -name 'email-dns-monitor-state-*.tar.gz' \
+    2>/dev/null | wc -l || echo 0)
+
+  if (( _edm_archive_count == 0 )); then
+    _fail "backup archives: none found in ${EDM_BACKUP}  (expected ≥1 state archive)"
+    _note "Check email-dns-monitor.timer is active and has completed at least one run"
+  else
+    # Find the most-recent archive mtime via find -printf; newest first, take top line.
+    _edm_newest_mtime=$(sudo -u emaildns find "$EDM_BACKUP" \
+      -maxdepth 1 -name 'email-dns-monitor-state-*.tar.gz' \
+      -printf '%T@\n' 2>/dev/null \
+      | sort -rn | head -1 || echo 0)
+    # Strip fractional seconds for integer arithmetic
+    _edm_newest_mtime=${_edm_newest_mtime%%.*}
+    _edm_archive_age=$(( $(date +%s) - _edm_newest_mtime ))
+
+    if   (( _edm_archive_age > 172800 )); then
+      _fail "backup archives: most-recent is ${_edm_archive_age}s old  (count: ${_edm_archive_count}, threshold: >48h)"
+      _note "Check email-dns-monitor.timer is active and last run produced a backup"
+    elif (( _edm_archive_age > 90000 )); then
+      _warn "backup archives: most-recent is ${_edm_archive_age}s old  (count: ${_edm_archive_count}, threshold: >25h)"
+      _note "Expected a fresh archive within the last 25h; service may have missed a window"
+    else
+      _ok  "backup archives: ${_edm_archive_count} found, most-recent ${_edm_archive_age}s old"
+    fi
+  fi
+
+  check_dir       "$EDM_BACKUP/history"  "backup/history"
+  check_dir_owner "$EDM_BACKUP/history" emaildns
   check_file "$EDM_DOMAINS_JSON" "domains/domains.json"
 
   # Validate domains.json is non-empty valid JSON
