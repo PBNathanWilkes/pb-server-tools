@@ -4,6 +4,58 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.7.0] — 2026-06-03
+
+### Added
+
+- **Per-host required packages and services (Sections 7 and 9):** replaces the
+  hard-coded `pandoc`/`wkhtmltopdf`/`glow` checks with a conf-driven mechanism.
+  Three new arrays in `/etc/server-tools/server-sanity.conf` (sourced at
+  runtime from `overrides/<hostname>/server-sanity.conf` in the repo):
+  - `REQUIRED_APT_PACKAGES`: apt packages that must be installed on this host.
+  - `REQUIRED_SNAP_PACKAGES`: snap packages that must be installed on this host.
+  - `REQUIRED_SERVICES`: systemd units that must be active on this host;
+    format `"unit_name|display_label"`.
+  All three arrays default to empty before the conf is sourced, so a host with
+  an old conf (no new keys) skips the checks silently rather than erroring.
+- **`check_apt_package <pkg>`:** extracted from the former inline Section 7
+  loop; checks dpkg status and reports version on success.
+- **`check_snap_package <pkg>`:** extracted from the former inline Section 7
+  block; checks `snap list` and reports version on success.
+- **`check_required_service <unit> <label>`:** new helper that checks
+  `systemctl is-active` and `systemctl is-failed` independently.  Distinguishes
+  three states: active (ok), failed (fail with reset-failed note), and any
+  other inactive state (fail with enable note).
+- **Section 9 — Required services:** new section that iterates `REQUIRED_SERVICES`
+  and calls `check_required_service` for each entry.  Prints `⊘ no required
+  services configured for this host` and increments no counters when the array
+  is empty.
+- **`overrides/pblinuxutility/server-sanity.conf`:** added
+  `REQUIRED_APT_PACKAGES=(pandoc wkhtmltopdf)`, `REQUIRED_SNAP_PACKAGES=(glow)`,
+  `REQUIRED_SERVICES=()`.
+- **`overrides/PBWEBSRV03/server-sanity.conf`:** added
+  `REQUIRED_APT_PACKAGES=()`, `REQUIRED_SNAP_PACKAGES=()`,
+  `REQUIRED_SERVICES=("cloudflared.service|Cloudflare tunnel")`.
+
+### Changed
+
+- **Section 7 — System tools:** hard-coded `pandoc`, `wkhtmltopdf`, and `glow`
+  checks removed; replaced by conf-driven loops over `REQUIRED_APT_PACKAGES`
+  and `REQUIRED_SNAP_PACKAGES`.  Behaviour on pblinuxutility is unchanged;
+  PBWEBSRV03 no longer emits failures for packages not installed there.
+- **File header:** updated `Applications checked` list to include Section 7
+  (system tools, conf-driven) and Section 9 (required services, conf-driven).
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md` (this file)
+- `overrides/pblinuxutility/server-sanity.conf`
+- `overrides/PBWEBSRV03/server-sanity.conf`
+- `docs/CHANGELOG.md` (repo)
+
+---
+
 ## [1.6.4] — 2026-06-03
 
 ### Fixed

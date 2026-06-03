@@ -4,6 +4,28 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.20] — 2026-06-03
+
+### Changed
+
+- `server-sanity` v1.7.0: per-host required packages and services now
+  conf-driven.  Hard-coded `pandoc`/`wkhtmltopdf`/`glow` checks replaced by
+  `REQUIRED_APT_PACKAGES` / `REQUIRED_SNAP_PACKAGES` arrays in
+  `overrides/<hostname>/server-sanity.conf`.  New Section 9 checks
+  `REQUIRED_SERVICES` array; used to assert cloudflared is active on
+  PBWEBSRV03.  New helpers: `check_apt_package`, `check_snap_package`,
+  `check_required_service`.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md`
+- `overrides/pblinuxutility/server-sanity.conf`
+- `overrides/PBWEBSRV03/server-sanity.conf`
+- `docs/CHANGELOG.md` (this file)
+
+---
+
 ## [1.0.19] — 2026-06-01
 
 ### Fixed

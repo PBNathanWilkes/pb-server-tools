@@ -34,11 +34,15 @@
 #   • SharePoint Export  (/opt/sharepoint-export)  — skipped if not installed
 #   • Server Tools       (/usr/local/libexec/pb-maintenance)
 #   • lighttpd                                      — skipped if not installed
+#   • System tools       (REQUIRED_APT_PACKAGES, REQUIRED_SNAP_PACKAGES from conf)
 #   • Server Sanity Check (self)                   — always checked
+#   • Required services  (REQUIRED_SERVICES from conf) — skipped if none configured
 #
 # Optional sections (2–4, 6) are guarded: sections 2–4 by their /opt install
 # root; section 6 (lighttpd) by binary presence.  If the sentinel is absent
 # the section prints "not installed" and no counters are incremented.
+# Sections 7 and 9 are driven by conf arrays; they skip gracefully if the
+# arrays are empty or the conf file is absent.
 # =============================================================================
 
 set -Eeuo pipefail
@@ -435,6 +439,59 @@ check_cert_expiry_file() {
 }
 
 
+# check_apt_package <package_name>
+# Checks that an apt package is installed; reports its version on success.
+check_apt_package() {
+  local pkg=$1
+  if /usr/bin/dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null \
+      | /bin/grep -q "install ok installed"; then
+    local ver
+    ver=$(/usr/bin/dpkg-query -W -f='${Version}' "$pkg" 2>/dev/null)
+    _ok "apt package:  ${pkg}  (${ver})"
+  else
+    _fail "apt package missing: ${pkg}"
+    _note "Fix: sudo apt-get install ${pkg}"
+  fi
+}
+
+# check_snap_package <package_name>
+# Checks that a snap package is installed; reports its version on success.
+check_snap_package() {
+  local pkg=$1
+  if ! /usr/bin/snap list "$pkg" >/dev/null 2>&1; then
+    _fail "snap package missing: ${pkg}"
+    _note "Fix: sudo snap install ${pkg}"
+  else
+    local ver
+    ver=$(/usr/bin/snap list "$pkg" 2>/dev/null | /usr/bin/awk 'NR==2 {print $2}')
+    _ok "snap package:  ${pkg}  (${ver})"
+  fi
+}
+
+# check_required_service <unit> <label>
+# Checks that a systemd service unit is active (running).
+# Also checks that it is not in a failed state, which can persist after a
+# restart even when the unit is currently active.
+check_required_service() {
+  local unit=$1 label=$2
+
+  local active_state failed_state
+  active_state=$(systemctl is-active  "$unit" 2>/dev/null || echo "inactive")
+  failed_state=$(systemctl is-failed  "$unit" 2>/dev/null || echo "unknown")
+
+  if [[ $failed_state == "failed" ]]; then
+    _fail "service: ${label} (${unit}) — failed"
+    _note "Fix: sudo systemctl reset-failed ${unit} && sudo systemctl start ${unit}"
+    _note "Logs: journalctl -u ${unit} --no-pager | tail -30"
+  elif [[ $active_state == "active" ]]; then
+    _ok  "service: ${label} (${unit}) — active"
+  else
+    _fail "service: ${label} (${unit}) — ${active_state}"
+    _note "Fix: sudo systemctl enable --now ${unit}"
+  fi
+}
+
+
 # =============================================================================
 # ── SECTION 1: Email stack (msmtp) ──────────────────────────────────────────
 # =============================================================================
@@ -493,6 +550,9 @@ fi
 # The config file is installed by server-sanity/install.sh from
 # overrides/<hostname>/server-sanity.conf in the repo.
 MSMTP_GROUP_MEMBERS=()
+REQUIRED_APT_PACKAGES=()
+REQUIRED_SNAP_PACKAGES=()
+REQUIRED_SERVICES=()
 _SANITY_CONF=/etc/server-tools/server-sanity.conf
 if [[ -f $_SANITY_CONF ]]; then
   # shellcheck source=/dev/null
@@ -878,23 +938,24 @@ fi
 # =============================================================================
 _head "System tools"
 
-# apt-managed tools
-for _pkg in pandoc wkhtmltopdf; do
-  if /usr/bin/dpkg-query -W -f='${Status}' "$_pkg" 2>/dev/null | /bin/grep -q "install ok installed"; then
-    _ok "apt package:  ${_pkg}  ($(/usr/bin/dpkg-query -W -f='${Version}' "$_pkg" 2>/dev/null))"
-  else
-    _fail "apt package missing: ${_pkg}"
-    _note "Fix: sudo apt-get install ${_pkg}"
-  fi
-done
+# Required packages are declared in /etc/server-tools/server-sanity.conf via
+# REQUIRED_APT_PACKAGES and REQUIRED_SNAP_PACKAGES.  If the conf file was not
+# sourced above (missing), the arrays will be empty and both loops skip.
 
-# snap-managed tools
-if ! /usr/bin/snap list glow >/dev/null 2>&1; then
-  _fail "snap package missing: glow"
-  _note "Fix: sudo snap install glow"
+if (( ${#REQUIRED_APT_PACKAGES[@]} == 0 )); then
+  _skip "no required apt packages configured for this host"
 else
-  _glow_ver=$(/usr/bin/snap list glow 2>/dev/null | /usr/bin/awk 'NR==2 {print $2}')
-  _ok "snap package:  glow  (${_glow_ver})"
+  for _pkg in "${REQUIRED_APT_PACKAGES[@]}"; do
+    check_apt_package "$_pkg"
+  done
+fi
+
+if (( ${#REQUIRED_SNAP_PACKAGES[@]} == 0 )); then
+  _skip "no required snap packages configured for this host"
+else
+  for _pkg in "${REQUIRED_SNAP_PACKAGES[@]}"; do
+    check_snap_package "$_pkg"
+  done
 fi
 
 
@@ -943,6 +1004,26 @@ else
     _note "The last scheduled run detected ${_sanity_fail_count} failure(s) — review the journal:"
     _note "  journalctl -u pb-server-sanity-check --no-pager | tail -100"
   fi
+fi
+
+
+# =============================================================================
+# ── SECTION 9: Required services ─────────────────────────────────────────────
+# =============================================================================
+_head "Required services"
+
+# REQUIRED_SERVICES is declared in /etc/server-tools/server-sanity.conf.
+# Each entry is "unit_name|display_label".  If the conf file was not sourced
+# above (missing), the array will be empty and the section skips.
+
+if (( ${#REQUIRED_SERVICES[@]} == 0 )); then
+  _skip "no required services configured for this host"
+else
+  for _svc_entry in "${REQUIRED_SERVICES[@]}"; do
+    _svc_unit="${_svc_entry%%|*}"
+    _svc_label="${_svc_entry##*|}"
+    check_required_service "$_svc_unit" "$_svc_label"
+  done
 fi
 
 
