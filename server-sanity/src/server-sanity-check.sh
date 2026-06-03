@@ -123,7 +123,9 @@ _skip() { printf "  ⊘  %s\n" "$*"; }
 # ── Traps ────────────────────────────────────────────────────────────────────
 # _ERR_HANDLED: not used by this script (no _die), but guards against re-entry
 #               if a future ERR fires after the trap itself encounters an error.
-# _EXIT_CLEAN:  set just before normal exit so _trap_exit is silent.
+# _EXIT_CLEAN:  set unconditionally before exit "$_EXIT" in the summary block.
+#               Silences both _trap_err and _trap_exit on all normal exit paths
+#               (success and failure).  Must be set before every top-level exit.
 _ERR_HANDLED=0
 _EXIT_CLEAN=0
 
@@ -131,6 +133,10 @@ _EXIT_CLEAN=0
 # shellcheck disable=SC2317
 _trap_err() {
   local rc=$? line=${BASH_LINENO[0]} cmd="${BASH_COMMAND}"
+  # Suppress after a normal exit path (including failure exits).  _EXIT_CLEAN
+  # is set unconditionally before exit "$_EXIT" in the summary block, so the
+  # ERR trap must not fire on the exit call itself.
+  (( _EXIT_CLEAN )) && return
   (( _ERR_HANDLED )) && return
   _ERR_HANDLED=1
   local _end _ms

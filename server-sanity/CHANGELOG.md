@@ -4,6 +4,26 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.6.2] — 2026-06-03
+
+### Fixed
+
+- **ERR trap misfires on non-zero exit:** `_trap_err` was firing on the
+  final `exit "$_EXIT"` call when `_fail > 0`, emitting a spurious
+  `ERROR: unexpected failure at line 1` block after the summary.
+  Added `(( _EXIT_CLEAN )) && return` as the first guard in `_trap_err`,
+  matching the existing pattern in `_trap_exit`.  `_EXIT_CLEAN=1` is
+  already set unconditionally before `exit "$_EXIT"` in all paths, so
+  both traps are now silent on every normal exit (success and failure).
+  Updated `_EXIT_CLEAN` comment to document it gates both traps.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md` (this file)
+
+---
+
 ## [1.6.1] — 2026-06-03
 
 ### Added
