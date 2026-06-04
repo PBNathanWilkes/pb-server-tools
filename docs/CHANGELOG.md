@@ -4,6 +4,43 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.21] — 2026-06-03
+
+### Fixed
+
+- `check-for-updates` v4.2.23: four reporter/evaluator delivery-and-escalation
+  defects found in the 2026-06-03 code audit (KFC #6):
+  - `pb-patch-reporter.sh` TERM/INT trap exited 0, masking an interrupted run
+    as success; now exits 128+signo.
+  - `prune_suppressions()` reset the escalation clock when a package was absent
+    from state for a single run; now prunes only when absent **and** expired.
+  - `pb-apt-evaluator.py` advanced `seen_count` on stale lists after a failed
+    `apt-get update`; now freezes the confirmation clock and tags candidates
+    `stale`.
+  - `iso_to_epoch()` returned 0 on parse failure, faking staleness and forcing
+    escalation; now returns empty and callers treat unparseable timestamps as
+    unknown.
+
+### Changed
+
+- `check-for-updates` v4.2.23: `--dry-run` wired through `check-for-updates.sh`
+  to both the evaluator and the (new) reporter dry-run mode.
+
+### Files changed
+
+- `check-for-updates/src/pb-apt-evaluator.py`
+- `check-for-updates/src/pb-patch-reporter.sh`
+- `check-for-updates/src/check-for-updates.sh`
+- `check-for-updates/tests/unit/test_pb_apt_evaluator.py`
+- `check-for-updates/tests/unit/test_pb_patch_reporter.sh`
+- `check-for-updates/DEV-GUIDE.md`
+- `check-for-updates/CHANGELOG.md`
+- `docs/SESSION-PROTOCOL.md`
+- `README.md`
+- `docs/CHANGELOG.md` (this file)
+
+---
+
 ## [1.0.20] — 2026-06-03
 
 ### Changed

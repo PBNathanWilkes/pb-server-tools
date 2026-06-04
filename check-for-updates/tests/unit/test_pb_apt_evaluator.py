@@ -892,5 +892,128 @@ class TestCheckLts(unittest.TestCase):
             "Exception detail must appear in log output")
 
 
+class TestEvaluateStaleFreeze(unittest.TestCase):
+    """
+    KFC #6: when apt-get update failed (apt_update_ok=False), the cross-run
+    confirmation clock (seen_count) must NOT advance, and candidates must carry
+    stale=True.  A candidate seen only in stale data must not graduate to
+    confirmed (seen_count >= 2) on evidence the evaluator flagged untrustworthy.
+    """
+
+    def _fake_apt_pkg(self, pkgs):
+        """
+        Build a fake apt_pkg module whose Cache.packages yields the given mock
+        packages, and whose DepCache dispatches per-package methods by identity.
+
+        pkgs — list of (pkg, depcache, cand_ver) triples from _make_pkg().
+        """
+        by_pkg = {id(pkg): (pkg, dc, cv) for (pkg, dc, cv) in pkgs}
+
+        depcache = MagicMock()
+
+        def _is_upgradable(p):
+            return by_pkg[id(p)][1].is_upgradable.return_value
+
+        def _get_candidate_ver(p):
+            return by_pkg[id(p)][1].get_candidate_ver.return_value
+
+        def _marked_keep(p):
+            return by_pkg[id(p)][1].marked_keep.return_value
+
+        def _phasing_applied(p):
+            return by_pkg[id(p)][1].phasing_applied.return_value
+
+        depcache.is_upgradable.side_effect = _is_upgradable
+        depcache.get_candidate_ver.side_effect = _get_candidate_ver
+        depcache.marked_keep.side_effect = _marked_keep
+        depcache.phasing_applied.side_effect = _phasing_applied
+
+        cache = MagicMock()
+        cache.packages = [p for (p, _dc, _cv) in pkgs]
+
+        fake = MagicMock()
+        fake.init_config.return_value = None
+        fake.init_system.return_value = None
+        fake.Cache.return_value = cache
+        fake.DepCache.return_value = depcache
+        return fake
+
+    def _run_evaluate(self, pkgs, prior_state, apt_update_ok):
+        fake = self._fake_apt_pkg(pkgs)
+        with patch.dict(sys.modules, {"apt_pkg": fake}):
+            return _mod._evaluate(prior_state, apt_update_ok=apt_update_ok)
+
+    def test_fresh_run_advances_seen_count(self):
+        """Baseline: apt_update_ok=True increments seen_count and sets stale=False."""
+        pkg = _make_pkg("curl", candidate_ver="8.5.0-2ubuntu10.9")
+        prior = {"schema": 2, "packages": [{
+            "name": "curl", "architecture": "amd64",
+            "candidate_version": "8.5.0-2ubuntu10.9",
+            "first_seen": "2026-05-08T08:34:12Z", "seen_count": 1,
+        }]}
+        out = self._run_evaluate([pkg], prior, apt_update_ok=True)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["seen_count"], 2)
+        self.assertFalse(out[0]["stale"])
+        self.assertEqual(out[0]["first_seen"], "2026-05-08T08:34:12Z")
+
+    def test_stale_run_freezes_seen_count(self):
+        """apt_update_ok=False must hold seen_count at its prior value."""
+        pkg = _make_pkg("curl", candidate_ver="8.5.0-2ubuntu10.9")
+        prior = {"schema": 2, "packages": [{
+            "name": "curl", "architecture": "amd64",
+            "candidate_version": "8.5.0-2ubuntu10.9",
+            "first_seen": "2026-05-08T08:34:12Z", "seen_count": 1,
+        }]}
+        out = self._run_evaluate([pkg], prior, apt_update_ok=False)
+        self.assertEqual(out[0]["seen_count"], 1,
+            "seen_count must NOT advance on stale lists")
+        self.assertTrue(out[0]["stale"])
+
+    def test_stale_run_new_candidate_starts_at_zero(self):
+        """A candidate first seen in stale data starts at seen_count=0, not 1."""
+        pkg = _make_pkg("vim", candidate_ver="2:9.1-1")
+        prior = {"schema": 2, "packages": []}
+        out = self._run_evaluate([pkg], prior, apt_update_ok=False)
+        self.assertEqual(out[0]["seen_count"], 0,
+            "new candidate in stale data has no fresh evidence; must start at 0")
+        self.assertTrue(out[0]["stale"])
+
+    def test_stale_candidate_cannot_reach_confirmation_in_two_stale_runs(self):
+        """
+        Two consecutive stale runs must not confirm a package: seen_count stays
+        below the threshold so the reporter's confirmed gate never fires on
+        untrustworthy data.
+        """
+        # Run 1 (stale): new candidate → seen_count 0
+        pkg1 = _make_pkg("vim", candidate_ver="2:9.1-1")
+        out1 = self._run_evaluate([pkg1], {"schema": 2, "packages": []},
+                                  apt_update_ok=False)
+        self.assertEqual(out1[0]["seen_count"], 0)
+        # Run 2 (stale): prior seen_count 0, still stale → stays 0
+        pkg2 = _make_pkg("vim", candidate_ver="2:9.1-1")
+        out2 = self._run_evaluate([pkg2], {"schema": 2, "packages": out1},
+                                  apt_update_ok=False)
+        self.assertLess(out2[0]["seen_count"], 2,
+            "two stale runs must not confirm a package")
+
+    def test_fresh_run_after_stale_resumes_advancing(self):
+        """Once apt update succeeds again, seen_count advances from the held value."""
+        pkg1 = _make_pkg("curl", candidate_ver="8.5.0-2ubuntu10.9")
+        prior = {"schema": 2, "packages": [{
+            "name": "curl", "architecture": "amd64",
+            "candidate_version": "8.5.0-2ubuntu10.9",
+            "first_seen": "2026-05-08T08:34:12Z", "seen_count": 1,
+        }]}
+        stale = self._run_evaluate([pkg1], prior, apt_update_ok=False)
+        self.assertEqual(stale[0]["seen_count"], 1)
+        pkg2 = _make_pkg("curl", candidate_ver="8.5.0-2ubuntu10.9")
+        fresh = self._run_evaluate([pkg2], {"schema": 2, "packages": stale},
+                                   apt_update_ok=True)
+        self.assertEqual(fresh[0]["seen_count"], 2,
+            "fresh run resumes advancing from the held value")
+        self.assertFalse(fresh[0]["stale"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

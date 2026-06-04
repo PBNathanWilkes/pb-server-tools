@@ -8,6 +8,10 @@
 #
 # v4.2.12
 ## VERSION HISTORY (for maintainers):
+# v4.2.23 — Wire --dry-run through to evaluator and reporter (was a declared-but-
+#            unused DRY_RUN_FLAG; passing --dry-run hit the unknown-option arm).
+#            Removes dead original_args local.  Reporter/evaluator fixes: see
+#            their headers and CHANGELOG (KFC #6).
 # v4.2.16 — Fix: _check_lts() in pb-apt-evaluator.py. Removes defunct
 #            check-new-release/check-new-release-gtk path lookup (scripts no
 #            longer exist on Ubuntu 24.04+). Drops -f DistUpgradeViewNonInteractive
@@ -53,7 +57,7 @@ set -Eeuo pipefail
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-readonly VERSION="4.2.16"
+readonly VERSION="4.2.23"
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
 
@@ -126,16 +130,19 @@ display_paths() {
 # ---------------------------------------------------------------------------
 MODE="check"
 ADDITIONAL_RECIPIENT=""
-DRY_RUN_FLAG=""
+DRY_RUN=0
 
 show_help() {
   cat <<EOF
-Usage: ${SCRIPT_NAME} [--check|--validate|--monthly] [--email ADDRESS] [--help|-h]
+Usage: ${SCRIPT_NAME} [--check|--validate|--monthly] [--email ADDRESS] [--dry-run] [--help|-h]
 
   --check     Check for updates; email only if updates exist or reboot required.
   --validate  Always email a full audit report.
   --monthly   Monthly verification report (always emails, both recipients).
   --email     Add an additional email recipient.
+  --dry-run   Evaluate and build the report but DO NOT write state or send email.
+              Passed through to the evaluator (prints JSON, no state write) and
+              the reporter (builds report, skips send).
   --help, -h  Show this help.
 
 Recipients:
@@ -166,6 +173,7 @@ parse_arguments() {
       --check)   MODE="check";    shift ;;
       --validate) MODE="validate"; shift ;;
       --monthly) MODE="monthly";  shift ;;
+      --dry-run) DRY_RUN=1;       shift ;;
       --email)
         [[ -z "${2:-}" ]] && { printf "ERROR: --email requires an address\n\n" >&2; show_help; trap - ERR; exit 1; }
         validate_email_addr "$2" || { printf "ERROR: invalid email: %s\n\n" "$2" >&2; show_help; trap - ERR; exit 1; }
@@ -209,7 +217,6 @@ require_reporter() {
 # Main
 # ---------------------------------------------------------------------------
 main() {
-  local original_args="$*"
   parse_arguments "$@"
   require_root
   ensure_logdir
@@ -222,10 +229,12 @@ main() {
 
   # Build evaluator args
   local eval_args=("--mode" "$MODE")
+  (( DRY_RUN )) && eval_args+=("--dry-run")
 
   # Build reporter args
   local report_args=("--${MODE}")
   [[ -n "$ADDITIONAL_RECIPIENT" ]] && report_args+=("--email" "$ADDITIONAL_RECIPIENT")
+  (( DRY_RUN )) && report_args+=("--dry-run")
 
   # --- Run evaluator ---
   section "Running evaluator"

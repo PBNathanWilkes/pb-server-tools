@@ -48,7 +48,7 @@ before alerting (seen_count ≥ 2 gate).
 - **Timers:** `pb-check-for-updates.timer` (daily), `pb-check-for-updates-monthly.timer`
 - **State:** `/var/lib/pb-maintenance/patch-state.json`
 - **Logs:** `/backup/patch-logs/`
-- **Version:** v4.2.20
+- **Version:** v4.2.23
 
 ### security-hardening
 

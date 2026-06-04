@@ -8,18 +8,30 @@
 # keyed on (name, architecture, candidate_version), and escalation logic.
 # Builds HTML email; sends via mailx.
 #
+# v4.2.23 — Fixes (see KFC #6):
+#   - TERM/INT trap previously exited 0, masking an interrupted run as success
+#     and silently dropping a pending alert.  Now exits 128+signo so systemd
+#     marks the unit failed.
+#   - prune_suppressions() pruned purely on absence from state, resetting the
+#     escalation clock (alert_count/first_alerted_at) whenever a package was
+#     transiently missing for one run (e.g. apt_update_failed).  Now prunes
+#     only when the package is gone AND the suppression has expired.
+#   - iso_to_epoch() returned 0 on parse failure, faking a STALE banner and
+#     force-escalating on a garbage timestamp.  Now returns empty; callers
+#     treat unparseable timestamps as "unknown", not "epoch 0".
 # v4.2.0
 #
 # Exit codes:
 #   0 — success
 #   1 — infrastructure failure (missing state file, JSON parse error, jq absent)
+#   130/143 — interrupted by SIGINT/SIGTERM (work incomplete)
 
 set -Eeuo pipefail
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-readonly VERSION="4.2.0"
+readonly VERSION="4.2.23"
 readonly SCRIPT_NAME="$(basename "$0")"
 
 STATE_DIR="${STATE_DIR:-/var/lib/pb-maintenance}"
@@ -57,6 +69,7 @@ MODE="check"
 ADDITIONAL_RECIPIENT=""
 EMAIL_HTML_FILE=""
 LOG_FILE=""
+DRY_RUN=0
 
 readonly HOSTNAME_FQDN="$(hostname --fqdn 2>/dev/null || hostname)"
 
@@ -78,7 +91,19 @@ on_err() {
   printf '[%s] ERROR line %s (exit %s): %s\n' "$ts" "$line" "$rc" "${BASH_COMMAND:-?}" >&2
 }
 trap on_err ERR
-trap 'log "Received SIGTERM; exiting cleanly"; exit 0' TERM INT
+# A run interrupted by a signal has NOT completed its work (the email may not
+# have been sent, the suppression file may be half-decided).  Exiting 0 here
+# would let systemd record success and silently drop a pending alert.  Exit with
+# the conventional 128+signo so the unit is marked failed and the next run's
+# staleness / apt_update_failed paths get a chance to resurface the condition.
+on_signal() {
+  local signo="$1"
+  log "Received signal ${signo}; aborting (work incomplete)"
+  trap - ERR  # avoid a spurious ERR report layered on top of the signal exit
+  exit $(( 128 + signo ))
+}
+trap 'on_signal 15' TERM
+trap 'on_signal 2'  INT
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -136,6 +161,8 @@ Usage: ${SCRIPT_NAME} --check|--validate|--monthly [--email ADDRESS]
   --validate  Always send a full audit report (includes suppressed/unconfirmed packages).
   --monthly   Always send a monthly verification report.
   --email     Add additional recipient.
+  --dry-run   Build the report but do not send email and do not write the
+              suppression file (the decision is logged; state is left untouched).
   --help      Show this help.
 EOF
 }
@@ -151,6 +178,7 @@ parse_arguments() {
       --check)   MODE="check";    shift ;;
       --validate) MODE="validate"; shift ;;
       --monthly) MODE="monthly";  shift ;;
+      --dry-run) DRY_RUN=1;       shift ;;
       --email)
         [[ -z "${2:-}" ]] && { printf "ERROR: --email requires an address\n" >&2; exit 1; }
         validate_email "$2" || { printf "ERROR: invalid email: %s\n" "$2" >&2; exit 1; }
@@ -218,8 +246,15 @@ write_suppression_file_atomic() {
 # ---------------------------------------------------------------------------
 # Epoch conversion
 # ---------------------------------------------------------------------------
+# Echoes the epoch for a parseable ISO timestamp, or an EMPTY string if the
+# input cannot be parsed.  Callers MUST distinguish empty (unparseable) from a
+# real epoch: the previous "echo 0 on failure" caused a garbage timestamp to
+# look like 1970-01-01, which both faked a STALE banner (now - 0 is enormous)
+# and force-escalated packages via an enormous days_pending.  See KFC #6.
 iso_to_epoch() {
-  date -u -d "$1" +%s 2>/dev/null || echo 0
+  local e
+  e="$(date -u -d "$1" +%s 2>/dev/null)" || return 0
+  [[ "$e" =~ ^[0-9]+$ ]] && printf '%s' "$e"
 }
 
 now_epoch() {
@@ -230,11 +265,15 @@ now_iso() {
   date -u +'%Y-%m-%dT%H:%M:%SZ'
 }
 
+# Whole days since an ISO timestamp.  Echoes empty if the timestamp is
+# unparseable, so callers can refuse to act on a garbage age rather than
+# treating it as "pending forever".
 days_since_iso() {
-  local iso="$1" then now_e
-  then="$(iso_to_epoch "$iso")"
+  local iso="$1" then_e now_e
+  then_e="$(iso_to_epoch "$iso")"
+  [[ -z "$then_e" ]] && return 0   # unparseable → echo nothing
   now_e="$(now_epoch)"
-  echo $(( (now_e - then) / 86400 ))
+  echo $(( (now_e - then_e) / 86400 ))
 }
 
 # ---------------------------------------------------------------------------
@@ -603,18 +642,30 @@ upsert_suppression() {
 }
 
 prune_suppressions() {
-  # Remove suppression entries for which no matching (name, arch, ver) exists in state.
-  local supp_json="$1" state_pkgs="$2"
+  # Remove a suppression entry only when BOTH are true:
+  #   (a) no matching (name, arch, candidate_version) exists in current state, AND
+  #   (b) the entry's suppressed_until is in the past.
+  #
+  # Rationale (KFC #6): the previous logic pruned purely on absence from state.
+  # A package can vanish from state.packages for one run without being resolved
+  # — e.g. an apt-get update failure yields stale/empty candidate data, or a
+  # transient phasing flip. Pruning such an entry discarded its alert_count and
+  # first_alerted_at, resetting the escalation clock to zero so a long-ignored
+  # update could never escalate. Keeping an unexpired entry preserves the
+  # escalation history across a single degraded evaluation; once it expires AND
+  # the package is genuinely no longer offered, it is removed as before.
+  local supp_json="$1" state_pkgs="$2" now_e
+  now_e="$(now_epoch)"
   printf '%s' "$supp_json" | jq \
     --argjson pkgs "$state_pkgs" \
+    --argjson now_e "$now_e" \
     '
       .suppressions = [
         .suppressions[]
         | . as $s
-        | if ($pkgs | any(.name == $s.name and .architecture == $s.architecture and .candidate_version == $s.candidate_version))
-          then .
-          else empty
-          end
+        | ($pkgs | any(.name == $s.name and .architecture == $s.architecture and .candidate_version == $s.candidate_version)) as $in_state
+        | (($s.suppressed_until // "1970-01-01T00:00:00Z") | fromdateiso8601? // 0) as $until_e
+        | if ($in_state or ($until_e > $now_e)) then . else empty end
       ]
     ' 2>/dev/null
 }
@@ -738,11 +789,19 @@ main() {
   local now_e eval_epoch stale_banner=""
   now_e="$(now_epoch)"
   eval_epoch="$(iso_to_epoch "$evaluated_at")"
-  local age_secs=$(( now_e - eval_epoch ))
-  if (( age_secs > STALE_THRESHOLD_SECS )); then
-    local age_hours=$(( age_secs / 3600 ))
-    stale_banner="🔴 EVALUATOR STALE — last evaluated ${age_hours}h ago; expected daily."
+  if [[ -z "$eval_epoch" ]]; then
+    # evaluated_at missing or unparseable: do NOT fabricate an age from epoch 0.
+    # Flag the malformed timestamp directly so the operator investigates the
+    # evaluator rather than chasing a phantom "stale" reading.
+    stale_banner="🔴 EVALUATOR TIMESTAMP INVALID — evaluated_at=${evaluated_at:-<empty>} could not be parsed; cannot determine freshness."
     log "WARN: $stale_banner"
+  else
+    local age_secs=$(( now_e - eval_epoch ))
+    if (( age_secs > STALE_THRESHOLD_SECS )); then
+      local age_hours=$(( age_secs / 3600 ))
+      stale_banner="🔴 EVALUATOR STALE — last evaluated ${age_hours}h ago; expected daily."
+      log "WARN: $stale_banner"
+    fi
   fi
 
   # --- Partition packages ---
@@ -838,7 +897,13 @@ main() {
 
     local days_pending
     days_pending="$(days_since_iso "$first_seen")"
-    (( days_pending > max_days_pending )) && max_days_pending="$days_pending"
+    if [[ -z "$days_pending" ]]; then
+      # first_seen unparseable: treat age as unknown rather than infinite.
+      # An unknown age must NOT silently satisfy the escalation threshold.
+      log "WARN: ${name}:${arch} ${ver} has unparseable first_seen=${first_seen}; age unknown"
+      days_pending=-1
+    fi
+    (( days_pending > max_days_pending )) && max_days_pending="$days_pending" || true
 
     # Look up existing suppression for alert_count
     local supp_obj prev_alert_count first_alerted
@@ -853,6 +918,8 @@ main() {
 
     local new_alert_count=$(( prev_alert_count + 1 ))
 
+    # days_pending == -1 (unknown) can never satisfy >= SUPPRESSION_TTL_DAYS,
+    # so an unparseable age cannot force an escalation.
     if (( prev_alert_count >= 1 && days_pending >= SUPPRESSION_TTL_DAYS )); then
       escalation_flag=true
     fi
@@ -864,13 +931,12 @@ main() {
     log "Will alert: ${name}:${arch} ${ver} (days_pending=${days_pending} alert_count=${new_alert_count})"
   done
 
-  # Write updated suppression file
-  if [[ "$alert_len" -gt 0 ]]; then
+  # Write updated suppression file (skipped in dry-run — state must be untouched)
+  if (( DRY_RUN )); then
+    log "[dry-run] suppression file NOT written"
+  else
     write_suppression_file_atomic "$supp_json"
     log "Suppression file updated"
-  else
-    # Still write back pruned version
-    write_suppression_file_atomic "$supp_json"
   fi
 
   exec 9>&-  # release suppression flock
@@ -1022,8 +1088,13 @@ main() {
 
   # --- Send email ---
   if [[ "$send_mail" == "true" ]]; then
-    section "Sending Email Report"
-    send_email "$email_subject" "$EMAIL_HTML_FILE" "$email_recipients" || true
+    if (( DRY_RUN )); then
+      section "Email send decision"
+      log "[dry-run] would send to '${email_recipients}': ${email_subject}"
+    else
+      section "Sending Email Report"
+      send_email "$email_subject" "$EMAIL_HTML_FILE" "$email_recipients" || true
+    fi
   fi
 
   section "pb-patch-reporter complete"

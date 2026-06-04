@@ -20,8 +20,8 @@ the session's task scope in one sentence.
 
 1. **Review CHANGELOG** — understand prior decisions and context for
    the area being changed. Current versions:
-   - Repo: v1.0.0
-   - `check-for-updates`: v4.2.15
+   - Repo: v1.0.21
+   - `check-for-updates`: v4.2.23
    - `security-hardening`: v2.1.15
    - `login-compliance`: v0.9.0
 
@@ -41,6 +41,13 @@ the session's task scope in one sentence.
      tmpfs (v3.10.16).
    - KFC #4: Dual `dist-upgrade -s` invocations caused phasing races
      (v3.10.17).
+   - KFC #5: `_check_lts()` swallowed all silent-failure detail, making
+     the Canonical-gate / misconfig / network cases indistinguishable
+     in the log (v4.2.16–v4.2.21; fixed v4.2.22).
+   - KFC #6: reporter could silently drop or never raise alerts — TERM/INT
+     trap exited 0, `prune_suppressions()` reset the escalation clock on a
+     one-run package absence, `seen_count` advanced on stale lists, and a
+     malformed timestamp faked staleness / forced escalation (fixed v4.2.23).
 
 3. **API Survey** — if a change depends on a third-party library API,
    verify all binding layers before concluding an API is absent

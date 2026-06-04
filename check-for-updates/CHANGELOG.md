@@ -4,6 +4,83 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [4.2.23] — 2026-06-03
+
+### Fixed
+
+- `pb-patch-reporter.sh`: the `TERM`/`INT` trap exited `0`, recording an
+  interrupted run as success. If the interrupt landed after the send decision
+  but before `send_email`, a real alert was dropped with no failure signal to
+  systemd. The trap now exits `128 + signo` (130/143) so the unit is marked
+  failed. See KFC #6(a).
+- `pb-patch-reporter.sh`: `prune_suppressions()` pruned a suppression purely on
+  the package's absence from current state. A one-run disappearance (stale lists
+  after a failed `apt-get update`, or a transient phasing flip) discarded
+  `alert_count`/`first_alerted_at` and reset the escalation clock, so a
+  long-ignored update could never escalate. Now prunes only when the package is
+  absent **and** the suppression has expired. See KFC #6(b).
+- `pb-apt-evaluator.py`: `_evaluate()` advanced `seen_count` (the cross-run
+  confirmation clock) even when `apt-get update` had failed and the lists were
+  stale, letting a candidate confirm on untrustworthy data and hiding security
+  updates released during the apt-failure window. `_evaluate()` now takes
+  `apt_update_ok`; on stale lists it holds `seen_count` at its prior value (new
+  candidates start at 0) and tags candidates `stale: true`. See KFC #6(c).
+- `pb-patch-reporter.sh`: `iso_to_epoch()` returned `0` on parse failure, so a
+  malformed `evaluated_at` faked a STALE banner and a malformed `first_seen`
+  force-escalated every package. `iso_to_epoch()`/`days_since_iso()` now return
+  empty on failure; the staleness check emits a distinct
+  `EVALUATOR TIMESTAMP INVALID` banner and an unknown age cannot satisfy the
+  escalation threshold. See KFC #6(d).
+
+### Changed
+
+- `check-for-updates.sh`: `--dry-run` is now wired through to the evaluator and
+  reporter. Previously a declared-but-unused `DRY_RUN_FLAG` meant passing
+  `--dry-run` hit the unknown-option arm and exited 1. The reporter gained a
+  `--dry-run` mode that builds the report but writes no suppression file and
+  sends no email. Removed dead `original_args` local. (M1, L3)
+
+### Added (KFC)
+
+- **KFC #6** added to `check-for-updates/DEV-GUIDE.md` §3, covering the four
+  reporter/evaluator delivery-and-escalation defects above.
+
+### Tests
+
+- `tests/unit/test_pb_apt_evaluator.py`: added `TestEvaluateStaleFreeze`
+  (5 cases, now 65 total) — stale-list freeze, `stale` flag, new-candidate
+  starts at 0, two-stale-runs-cannot-confirm, resume-on-fresh-run.
+- `tests/unit/test_pb_patch_reporter.sh`: `T18` rewritten to assert the
+  corrected prune semantics (unexpired suppression retained on absence,
+  `alert_count` preserved); added `T18b` (expired + absent → pruned),
+  `T18c` (dry-run leaves suppression/email untouched), `T18d` (invalid
+  timestamp → distinct banner, no fake stale age). Now 38 total.
+
+### Internal
+
+- `pb-apt-evaluator.py`: `_check_lts()` binds `result = None` before the
+  subprocess call (defensive against a future refactor reaching the no-match
+  path with `result` unbound). `_evaluate()` docstring corrected (returns a
+  list of candidate dicts, not the state dict). Phasing-fallback comment
+  reworded to remove a misleading "include the package" phrasing. (M4, L1, L2)
+- `pb-patch-reporter.sh`: renamed keyword-shadowing local `then` → `then_e`
+  (L5).
+
+### Files changed
+
+- `check-for-updates/src/pb-apt-evaluator.py`
+- `check-for-updates/src/pb-patch-reporter.sh`
+- `check-for-updates/src/check-for-updates.sh`
+- `check-for-updates/tests/unit/test_pb_apt_evaluator.py`
+- `check-for-updates/tests/unit/test_pb_patch_reporter.sh`
+- `check-for-updates/DEV-GUIDE.md` (KFC #6 added; §1 current version)
+- `check-for-updates/CHANGELOG.md` (this file)
+- `docs/SESSION-PROTOCOL.md` (KFC #5/#6 enumeration; current-version block)
+- `docs/CHANGELOG.md` (repo version bump)
+- `README.md` (component version string)
+
+---
+
 ## [4.2.22] — 2026-05-30
 
 ### Fixed

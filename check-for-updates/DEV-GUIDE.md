@@ -1,7 +1,7 @@
 # DEV-GUIDE.md — check-for-updates Development Guide
 
 **Project:** `check-for-updates`
-**Current version:** v4.2.22
+**Current version:** v4.2.23
 **Platform:** Ubuntu 24.04 Noble
 
 ---
@@ -251,7 +251,92 @@ once per package in a single cache scan. No re-evaluation races possible.
 
 ---
 
-## 4. API Survey Requirement
+### KFC #6 — `v4.2.0–v4.2.22`: reporter delivery and escalation could silently drop or never raise alerts
+
+A code audit (2026-06-03) found three independent defects in the
+state → suppression → escalation → delivery path. They share a theme: an
+abnormal-but-recoverable condition (a signal, a one-run package disappearance,
+a failed `apt-get update`, or a malformed timestamp) was handled in a way that
+*looked* clean while actually losing or never raising an alert.
+
+**Observed / failure modes:**
+
+- **(a) `pb-patch-reporter.sh` TERM/INT trap exited 0.** A run killed mid-flight
+  (systemd stop, `JobTimeoutSec`, operator Ctrl-C) recorded success. If the
+  interrupt landed after the send decision but before `send_email`, a real
+  pending-update / `apt_update_failed` alert was dropped with no non-zero exit
+  for systemd to catch.
+
+- **(b) `prune_suppressions()` pruned purely on absence from state.** A package
+  can vanish from `state.packages` for a single run without being resolved —
+  e.g. `apt-get update` failed and the candidate set is stale/empty, or a
+  transient phasing flip. Pruning the suppression discarded its `alert_count`
+  and `first_alerted_at`, resetting the escalation clock to zero. A package
+  pending and ignored for weeks could therefore never satisfy the escalation
+  gate (`prev_alert_count >= 1 && days_pending >= SUPPRESSION_TTL_DAYS`).
+
+- **(c) `pb-apt-evaluator.py` advanced `seen_count` on stale lists.** When
+  `apt-get update` failed, `_evaluate()` still ran against stale lists and kept
+  incrementing every candidate's `seen_count`. A candidate seen only in stale
+  data could graduate to confirmed (`seen_count >= 2`) on evidence the evaluator
+  itself flagged untrustworthy, and a security update released *during* the
+  apt-failure window was invisible to the confirmation gate.
+
+- **(d) `iso_to_epoch()` returned `0` on parse failure.** A missing/garbage
+  `evaluated_at` made `age = now - 0` ≈ 1.7e9 s → permanent false STALE banner;
+  a garbage `first_seen` made `days_pending` enormous → forced escalation. One
+  malformed field both faked staleness and force-escalated every package.
+
+**Fix applied:** v4.2.23 —
+
+- (a) TERM/INT trap now exits `128 + signo` (130/143) so the unit is marked
+  failed; documented in the exit-code header.
+- (b) `prune_suppressions()` removes an entry only when the package is absent
+  from state **and** its `suppressed_until` is in the past. An unexpired entry
+  for a transiently-absent package is retained, preserving escalation history.
+- (c) `_evaluate()` takes `apt_update_ok`; on stale lists it holds `seen_count`
+  at its prior value (new candidates start at 0, not 1) and tags candidates
+  `stale: true`. Dry-run is unaffected (it sets `apt_update_ok=True`).
+- (d) `iso_to_epoch()` returns empty on parse failure; `days_since_iso()`
+  returns empty; callers treat unparseable timestamps as *unknown* — the
+  reporter emits a distinct `EVALUATOR TIMESTAMP INVALID` banner and an unknown
+  age (`-1`) can never satisfy the escalation threshold.
+
+**Current-version mitigation / regression guards:**
+
+- Evaluator: `TestEvaluateStaleFreeze` (5 cases) asserts the freeze, the
+  `stale` flag, the new-candidate-starts-at-0 rule, the two-stale-runs-cannot-
+  confirm invariant, and resume-on-fresh-run.
+- Reporter: `T18` (unexpired retained + alert_count preserved), `T18b`
+  (expired + absent pruned), `T18c` (dry-run leaves suppression/email
+  untouched), `T18d` (invalid timestamp → distinct banner, no fake stale age).
+  The pre-fix `T18` assertion (pruned-on-absence) was the bug and was replaced.
+
+**Note for re-investigation:** (b), (c) and (d) all touch the same
+state → suppression → escalation path; review the then-current code before any
+further change here, as fixes interact.
+
+---
+
+### KFC #4 — `v3.10.17`: Dual `dist-upgrade -s` invocation caused phasing races
+
+**Observed:** `get_actual_upgrades()` was called independently inside both
+`get_upgradable()` and `get_security_updates()`. APT re-evaluates phasing on
+every `dist-upgrade -s` invocation. A package at a phase boundary (e.g.
+`open-vm-tools` at exactly the phase threshold) could appear installable in one
+call and deferred in the other. This produced a false-positive `upgrade_count`
+and a spurious alert email.
+
+**Failure mode:** Phase-boundary package → non-deterministic inclusion across
+two invocations → mismatch between `upgrade_count` and `security_count` →
+false-positive alert.
+
+**Fix applied at the time:** v3.10.17 — compute `actual_upgrades` once in
+`main()` and pass as argument to both functions.
+
+**v4.2 mitigation:** `dist-upgrade -s` is not called anywhere in the v4.2
+pipeline. `DepCache` is opened once per evaluator run; phasing is evaluated
+once per package in a single cache scan. No re-evaluation races possible.
 
 **Applies to any design that depends on a third-party library API.**
 

@@ -5,6 +5,14 @@
 # Phasing detection: apt_pkg.DepCache.phasing_applied() (native, in-process).
 # Fallback: apt-cache policy subprocess (only if phasing_applied() raises).
 #
+# v4.2.23 — Fix: _evaluate() no longer advances seen_count (the cross-run
+#            confirmation clock) when apt-get update failed and the package
+#            lists are stale.  A candidate observed only in stale data could
+#            previously graduate to "confirmed" (seen_count >= 2) on evidence
+#            the evaluator itself flagged as untrustworthy, and a security
+#            update released during the apt-failure window was effectively
+#            invisible to the confirmation gate.  Candidates now carry a
+#            ``stale`` flag.  See KFC #6.
 # v4.2.22 — Fix: _check_lts() now logs the tool's exit code and stderr when no
 #            upgrade string is found, so the operator can distinguish three silent
 #            failure modes: (a) Canonical upgrade path not yet open in
@@ -43,7 +51,7 @@ from datetime import datetime, timezone
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-VERSION = "4.2.22"
+VERSION = "4.2.23"
 SCRIPT_NAME = os.path.basename(__file__)
 
 STATE_DIR      = "/var/lib/pb-maintenance"
@@ -327,7 +335,9 @@ def _is_phased_via_policy_fallback(pkg_name: str, candidate_ver: str) -> bool:
 
     policy_output = _POLICY_CACHE[pkg_name]
     if not policy_output:
-        # Safe-fail toward alerting: if we cannot parse, include the package
+        # Treat unparseable/empty policy output as "not phased" so the package
+        # is still surfaced to the operator rather than silently excluded.
+        # (Returning False here means "not phased" → the caller keeps it.)
         return False
 
     pattern = re.compile(
@@ -396,10 +406,19 @@ def _build_prior_index(prior: dict) -> dict[tuple[str, str], dict]:
 # ---------------------------------------------------------------------------
 # Core evaluation
 # ---------------------------------------------------------------------------
-def _evaluate(prior_state: dict) -> dict:
+def _evaluate(prior_state: dict, apt_update_ok: bool = True) -> list:
     """
-    Open apt_pkg.Cache + DepCache, enumerate candidates, merge with prior state.
-    Returns the new state dict (not yet written to disk).
+    Open apt_pkg.Cache + DepCache, enumerate upgradable non-phased candidates,
+    merge with prior state, and return the list of candidate dicts (NOT the full
+    state dict — the caller assembles that).
+
+    apt_update_ok — False when the preceding apt-get update failed and the
+    package lists are stale.  In that case the cross-run confirmation clock
+    (seen_count) is NOT advanced: a candidate seen only in stale data must not
+    graduate to "confirmed" (seen_count >= 2) on evidence the evaluator itself
+    declared untrustworthy.  seen_count is held at its prior value (KFC #6).
+    A per-candidate ``stale`` flag records that this observation came from
+    unrefreshed lists.
     """
     import apt_pkg  # type: ignore[import]
 
@@ -475,10 +494,16 @@ def _evaluate(prior_state: dict) -> dict:
                 and prior_entry.get("candidate_version") == candidate_ver
             ):
                 first_seen = prior_entry.get("first_seen", now_iso)
-                seen_count = prior_entry.get("seen_count", 0) + 1
+                prior_seen = prior_entry.get("seen_count", 0)
+                # Only advance the confirmation clock on a fresh observation.
+                # Stale lists (apt-get update failed) must not graduate a
+                # candidate to confirmed status (KFC #6).
+                seen_count = prior_seen + 1 if apt_update_ok else prior_seen
             else:
                 first_seen = now_iso
-                seen_count = 1
+                # A candidate appearing for the first time in stale data starts
+                # at 0, not 1: we have no fresh evidence it is genuinely pending.
+                seen_count = 1 if apt_update_ok else 0
 
             candidates.append(
                 {
@@ -491,6 +516,7 @@ def _evaluate(prior_state: dict) -> dict:
                     "first_seen": first_seen,
                     "last_seen": now_iso,
                     "seen_count": seen_count,
+                    "stale": not apt_update_ok,
                 }
             )
         except Exception as exc:
@@ -544,6 +570,7 @@ def _check_lts() -> tuple[bool, str | None]:
       (b) /etc/update-manager/release-upgrades absent or Prompt=never;
       (c) changelogs.ubuntu.com unreachable.
     """
+    result = None
     try:
         result = subprocess.run(
             ["do-release-upgrade", "-c"],
@@ -660,7 +687,7 @@ def main(argv: list[str] | None = None) -> int:
 
             # --- Open apt cache + evaluate ---
             try:
-                candidates = _evaluate(prior_state)
+                candidates = _evaluate(prior_state, apt_update_ok=apt_update_ok)
             except ImportError:
                 _log_info(
                     "ERROR: python3-apt not available; install with: "

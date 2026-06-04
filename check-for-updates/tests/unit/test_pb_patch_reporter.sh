@@ -553,11 +553,14 @@ run_all_tests() {
   }
 
   # ------------------------------------------------------------------
-  # T18: suppression pruned when package retracted
+  # T18: KFC #6 — an UNEXPIRED suppression for a package transiently absent
+  #      from state must be RETAINED (not pruned).  Pruning it here would reset
+  #      the escalation clock.  This replaces the pre-fix assertion that pruned
+  #      purely on absence.
   # ------------------------------------------------------------------
   {
     setup_env
-    write_state "$(empty_state)"  # no packages
+    write_state "$(empty_state)"  # package transiently absent (e.g. degraded eval)
     local supp
     supp="$(jq -n \
       --arg su "$(future_iso 3)" \
@@ -570,8 +573,71 @@ run_all_tests() {
     write_suppression "$supp"
     run_reporter --validate >/dev/null
     local remaining
+    remaining="$(jq '.suppressions | length' "$SUPP_FILE_T" 2>/dev/null || echo 0)"
+    assert_eq "T18_unexpired_suppression_retained_when_pkg_absent" "$remaining" "1"
+    # alert_count must be preserved across the absence
+    local ac
+    ac="$(jq -r '.suppressions[0].alert_count' "$SUPP_FILE_T" 2>/dev/null || echo "?")"
+    assert_eq "T18_alert_count_preserved" "$ac" "1"
+    teardown_env
+  }
+
+  # ------------------------------------------------------------------
+  # T18b: KFC #6 — a suppression that is BOTH absent from state AND expired is
+  #       pruned (genuinely gone package, window passed).
+  # ------------------------------------------------------------------
+  {
+    setup_env
+    write_state "$(empty_state)"  # no packages
+    local supp
+    supp="$(jq -n \
+      '{schema:2, updated_at:null,
+        suppressions:[{name:"curl", architecture:"amd64", candidate_version:"1.0",
+          is_security:false, alert_count:1,
+          first_alerted_at:"2026-05-05T08:00:00Z",
+          last_alerted_at:"2026-05-05T08:00:00Z",
+          suppressed_until:"2026-05-01T08:00:00Z"}]}')"  # expired
+    write_suppression "$supp"
+    run_reporter --validate >/dev/null
+    local remaining
     remaining="$(jq '.suppressions | length' "$SUPP_FILE_T" 2>/dev/null || echo 1)"
-    assert_eq "T18_suppression_pruned_when_pkg_retracted" "$remaining" "0"
+    assert_eq "T18b_expired_and_absent_suppression_pruned" "$remaining" "0"
+    teardown_env
+  }
+
+  # ------------------------------------------------------------------
+  # T18c: KFC #6 — dry-run must NOT write the suppression file.
+  # ------------------------------------------------------------------
+  {
+    setup_env
+    local pkg
+    pkg="$(pkg_entry curl amd64 1.0 2)"
+    write_state "$(state_with_pkg "$pkg")"
+    write_suppression "$(empty_suppression)"
+    # Capture the suppression file mtime/content before
+    local before
+    before="$(cat "$SUPP_FILE_T")"
+    run_reporter --check --dry-run >/dev/null
+    local after
+    after="$(cat "$SUPP_FILE_T")"
+    assert_eq "T18c_dry_run_leaves_suppression_unchanged" "$after" "$before"
+    assert_file_absent "T18c_dry_run_no_email" "$MAIL_CAPTURE"
+    teardown_env
+  }
+
+  # ------------------------------------------------------------------
+  # T18d: M2 — an invalid evaluated_at must NOT produce a fake STALE age;
+  #       it emits the distinct TIMESTAMP INVALID banner instead.
+  # ------------------------------------------------------------------
+  {
+    setup_env
+    write_state "$(empty_state "not-a-timestamp")"
+    write_suppression "$(empty_suppression)"
+    run_reporter --validate >/dev/null
+    local mail_content
+    mail_content="$(cat "$MAIL_CAPTURE" 2>/dev/null || echo "")"
+    assert_contains "T18d_invalid_timestamp_banner" "$mail_content" "TIMESTAMP INVALID"
+    assert_not_contains "T18d_no_fake_stale_hours" "$mail_content" "last evaluated"
     teardown_env
   }
 
