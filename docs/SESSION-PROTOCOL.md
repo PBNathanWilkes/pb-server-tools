@@ -20,10 +20,10 @@ the session's task scope in one sentence.
 
 1. **Review CHANGELOG** — understand prior decisions and context for
    the area being changed. Current versions:
-   - Repo: v1.0.21
+   - Repo: v1.0.22
    - `check-for-updates`: v4.2.23
    - `security-hardening`: v2.1.15
-   - `login-compliance`: v0.9.0
+   - `login-compliance`: v0.10.0
 
 2. **KFC Check** — reason through each applicable KFC entry and
    explicitly state whether this change is implicated and why.
@@ -134,7 +134,7 @@ After presenting code, always provide:
 
 | Component | Test files |
 |---|---|
-| `check-for-updates` | `test_pb_apt_evaluator.py`, `test_pb_patch_reporter.sh`, `test_login_compliance.sh` (legacy) |
+| `check-for-updates` | `test_pb_apt_evaluator.py`, `test_pb_patch_reporter.sh` |
 | `security-hardening` | `test_security_hardening.sh` |
 | `login-compliance` | `login-compliance/tests/unit/test_login_compliance.sh` (canonical) |
 

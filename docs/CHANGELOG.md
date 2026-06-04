@@ -4,6 +4,46 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.22] — 2026-06-03
+
+### Changed
+
+- `login-compliance` v0.10.0: login banner patch check now reads
+  `patch-state.json` via jq instead of recomputing with `apt-get dist-upgrade
+  -s`; the XDG patch cache was removed (a jq read is already fast). Adds a
+  two-tier staleness model (`LCHECK_PATCH_DEAD_DAYS`, default 3d) so the banner
+  reflects a real current problem rather than merely old data: mildly-stale data
+  annotates the real verdict with `(data Nh old)` instead of overriding to WARN;
+  only a dead evaluator (>3d) or a genuine error warns. Eliminates the
+  false-positive/false-negative and login-lag behaviour of the cached
+  recompute.
+
+### Fixed
+
+- `login-compliance` v0.10.0: `_iso_to_epoch()` returned 0 on parse failure,
+  faking a stale banner; now returns empty and reports unparseable timestamps
+  distinctly.
+- **KFC-R01 regression**: the canonical `login-compliance/` source had drifted
+  to the obsolete dist-upgrade/cache implementation while the correct
+  state-file implementation sat in the `check-for-updates/` duplicate that
+  should not have existed (and the installer deployed the obsolete one).
+  Consolidated to a single canonical copy; both `check-for-updates/` duplicates
+  (source and test) deleted.
+
+### Files changed
+
+- `login-compliance/src/login-compliance-check.sh`
+- `login-compliance/tests/unit/test_login_compliance.sh`
+- `check-for-updates/src/login-compliance-check.sh` (deleted)
+- `check-for-updates/tests/unit/test_login_compliance.sh` (deleted)
+- `login-compliance/CHANGELOG.md`
+- `docs/DEV-GUIDE.md`
+- `docs/SESSION-PROTOCOL.md`
+- `README.md`
+- `docs/CHANGELOG.md` (this file)
+
+---
+
 ## [1.0.21] — 2026-06-03
 
 ### Fixed

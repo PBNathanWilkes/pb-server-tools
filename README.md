@@ -179,7 +179,6 @@ guidance.
 ```bash
 # Run all component tests without deploying
 bash check-for-updates/tests/unit/test_pb_patch_reporter.sh
-bash check-for-updates/tests/unit/test_login_compliance.sh
 python3 -m pytest check-for-updates/tests/unit/test_pb_apt_evaluator.py -v
 bash security-hardening/tests/unit/test_security_hardening.sh
 bash login-compliance/tests/unit/test_login_compliance.sh

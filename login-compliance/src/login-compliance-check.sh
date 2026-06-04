@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# login-compliance-check.sh — Login-time compliance quick check (msmtp-as-sendmail)
+# login-compliance-check.sh — Login-time compliance quick check
 # One-line summary:
 #   [login-check] Email=<OK|WARN|CRITICAL> Sent=<OK|WARN|CRITICAL> Patches=<OK|WARN|CRITICAL>
 #
-# INSTALL (recommended):
-#   sudo install -m 0755 /tmp/login-compliance-check.sh /usr/local/bin/login-compliance-check.sh
+# INSTALL:
+#   sudo install -m 0755 login-compliance-check.sh /usr/local/bin/login-compliance-check.sh
 #   Add to ~/.bashrc (interactive shells only):
 #     if [[ $- == *i* ]] && [[ -x /usr/local/bin/login-compliance-check.sh ]]; then
 #       /usr/local/bin/login-compliance-check.sh
@@ -12,112 +12,69 @@
 #   Ensure ~/.bash_profile sources ~/.bashrc so login shells pick it up:
 #     [[ -f ~/.bashrc ]] && source ~/.bashrc
 #
-# PERFORMANCE (first-run speed):
-#   The patch check (apt) is the slowest part and is cached after the first run.
-#   Cache is invalidated whenever check-for-updates.sh runs apt-get update
-#   (via /var/lib/apt/lists/pb-last-update), or when the TTL expires.
-#   To pre-warm the cache so logins are always fast, add a cron job:
-#     */30 * * * * /usr/local/bin/login-compliance-check.sh >/dev/null 2>&1
+# PATCH CHECK (v4.2 state-file model):
+#   Reads /var/lib/pb-maintenance/patch-state.json and patch-suppression.json
+#   via jq.  No apt-get invocation, no dist-upgrade -s, no XDG cache.  A jq read
+#   of one small file is fast enough that the banner reflects the true current
+#   state file on every login.
+#
+#   Staleness of the state file is handled in two tiers so the indicator means
+#   "real current problem", not "data is a little old":
+#     - fresh (<= 26h): report the patch verdict as-is.
+#     - mildly stale (26h .. LCHECK_PATCH_DEAD_DAYS): report the real verdict,
+#       annotated "(data Nh old)"; a clean host stays OK, pending patches show.
+#     - dead (> LCHECK_PATCH_DEAD_DAYS, default 3d): WARN — evaluator looks dead.
+#   Requires: jq >= 1.6 (Ubuntu Noble ships 1.7)
 #
 # Notes:
 # - Script ALWAYS prints when executed directly.
-# - Do NOT cache/suppress the banner itself; only the patch computation is cached.
 # - msmtp is configured system-wide (/etc/msmtprc); no per-user config expected.
-# - Patch count uses apt-get dist-upgrade -s (sim mode) — phased updates excluded,
-#   consistent with check-for-updates.sh.
-# - Cache is invalidated when /var/lib/apt/lists/pb-last-update is newer than the
-#   cache write time (written by check-for-updates.sh after apt-get update).
-#   Falls back to /var/lib/apt/lists/lock if pb-last-update is absent.
+# - This is the canonical copy (KFC-R01).  The former duplicate under
+#   check-for-updates/src/ has been removed.
 #
-# v0.9.0
+# v0.10.0
 set -uo pipefail
 
 : "${LCHECK_DAYS_SENT:=45}"
 : "${LCHECK_MAX_LOG_LINES:=6000}"
-: "${LCHECK_PATCH_STALE_DAYS:=7}"
-: "${LCHECK_PATCH_CACHE_TTL:=3600}"   # seconds; 0 = always recompute
-: "${LCHECK_VERBOSE:=0}"              # 1=print reasons for WARN/CRITICAL
+: "${LCHECK_VERBOSE:=0}"
+# Staleness of patch-state.json is handled in two tiers (see _check_patches):
+#   - fresh        (age <= STALE_THRESHOLD_SECS): report the patch verdict as-is.
+#   - mildly stale (STALE_THRESHOLD_SECS < age <= LCHECK_PATCH_DEAD_DAYS): still
+#     report the real patch verdict, but annotate it with "(data Nh old)".  A
+#     clean system stays OK; genuinely pending patches still show through.
+#   - dead         (age > LCHECK_PATCH_DEAD_DAYS): WARN — the evaluator looks
+#     dead and the data can no longer be trusted; "unknown" is the problem.
+: "${LCHECK_PATCH_DEAD_DAYS:=3}"
 
-# Shared stamp written by check-for-updates.sh after each apt-get update.
-# Primary cache-invalidation signal; falls back to /var/lib/apt/lists/lock.
-readonly APT_UPDATE_STAMP="/var/lib/apt/lists/pb-last-update"
+# State files (v4.2)
+STATE_DIR="${STATE_DIR:-/var/lib/pb-maintenance}"
+STATE_FILE="${STATE_FILE:-${STATE_DIR}/patch-state.json}"
+STATE_LOCK="${STATE_LOCK:-${STATE_DIR}/patch-state.json.lock}"
+SUPP_FILE="${SUPP_FILE:-${STATE_DIR}/patch-suppression.json}"
+SUPP_LOCK="${SUPP_LOCK:-${STATE_DIR}/patch-suppression.json.lock}"
+readonly STATE_DIR STATE_FILE SUPP_FILE
+
+# Staleness threshold: 26h (24h cadence + 2h grace)
+readonly STALE_THRESHOLD_SECS=$(( 26 * 3600 ))
+
+# Dead-evaluator threshold: beyond this the state file is not trusted at all.
+readonly DEAD_THRESHOLD_SECS=$(( LCHECK_PATCH_DEAD_DAYS * 86400 ))
+
+# Cross-run confirmation threshold (must match reporter)
+readonly SEEN_COUNT_THRESHOLD=2
 
 _now_epoch() { date +%s; }
-_has_cmd() { command -v "$1" >/dev/null 2>&1; }
+_has_cmd()   { command -v "$1" >/dev/null 2>&1; }
 
-_cache_dir() {
-  local d
-  d="${XDG_CACHE_HOME:-$HOME/.cache}/login-compliance"
-  mkdir -p "$d" 2>/dev/null || true
-  printf '%s' "$d"
-}
-
-_cache_time_get() {
-  local key="$1" f
-  f="$(_cache_dir)/${key}.time"
-  [[ -f "$f" ]] || return 1
-  cat "$f" 2>/dev/null || return 1
-}
-
-_cache_time_set() {
-  local key="$1" val="$2" f
-  f="$(_cache_dir)/${key}.time"
-  printf '%s' "$val" >"$f" 2>/dev/null || true
-}
-
-_cache_value_get() {
-  local key="$1" f
-  f="$(_cache_dir)/${key}.value"
-  [[ -f "$f" ]] || return 1
-  cat "$f" 2>/dev/null || return 1
-}
-
-_cache_value_set() {
-  local key="$1" val="$2" f
-  f="$(_cache_dir)/${key}.value"
-  printf '%s' "$val" >"$f" 2>/dev/null || true
-}
-
-_cache_fresh() {
-  # Returns 0 (true) only when:
-  #   1. TTL has not expired, AND
-  #   2. The apt lists have NOT been updated since the cache was written.
-  # Condition 2 uses pb-last-update (written by check-for-updates.sh) as the
-  # primary signal, falling back to /var/lib/apt/lists/lock.
-  local key="$1" ttl="$2" last now apt_stamp
-
-  [[ "$ttl" =~ ^[0-9]+$ ]] || return 1
-  (( ttl == 0 )) && return 1
-
-  last="$(_cache_time_get "$key")" || return 1
-  [[ "$last" =~ ^[0-9]+$ ]]       || return 1
-
-  now="$(_now_epoch)"
-  (( now - last < ttl )) || return 1   # TTL expired
-
-  # Invalidate if apt lists have been refreshed since the cache was written.
-  apt_stamp="$(_apt_update_stamp_epoch)"
-  if [[ "$apt_stamp" =~ ^[0-9]+$ ]] && (( apt_stamp > 0 )); then
-    (( apt_stamp <= last )) || return 1  # apt updated after cache → stale
-  fi
-
-  return 0
-}
-
-_apt_update_stamp_epoch() {
-  # Return the mtime of the most recent reliable apt-update stamp, or 0.
-  # pb-last-update is written by check-for-updates.sh and is authoritative.
-  # /var/lib/apt/lists/lock is the fallback for manual apt-get update runs.
-  local f
-  for f in "$APT_UPDATE_STAMP" \
-            /var/lib/apt/lists/lock \
-            /var/lib/apt/periodic/update-success-stamp \
-            /var/lib/apt/periodic/apt-update-stamp-stable; do
-    if [[ -e "$f" ]]; then
-      stat -c %Y "$f" 2>/dev/null && return 0
-    fi
-  done
-  printf '0'
+_iso_to_epoch() {
+  # Echoes the epoch for a parseable ISO timestamp, or an EMPTY string on
+  # failure.  Returning 0 on failure (the previous behaviour) made an
+  # unparseable timestamp look like 1970-01-01, producing a false "stale"
+  # reading.  Callers must distinguish empty from a real epoch.
+  local e
+  e="$(date -u -d "$1" +%s 2>/dev/null)" || return 0
+  [[ "$e" =~ ^[0-9]+$ ]] && printf '%s' "$e"
 }
 
 _age_days_of_file() {
@@ -182,10 +139,9 @@ _check_email_stack() {
     issues=$((issues+2)); reasons+=("sendmail missing")
   fi
 
-  # System-level config check only — no per-user msmtprc expected
   local conf
   if conf=$(_find_msmtp_system_conf); then
-    true  # config exists, that's sufficient
+    true
   else
     issues=$((issues+1)); reasons+=("no system msmtprc found")
   fi
@@ -218,17 +174,15 @@ _find_msmtp_log_guess() {
 }
 
 _msmtp_line_is_success() {
-  local line="$1"
-
-  echo "$line" | grep -Eqi 'exitcode=EX_(TEMPFAIL|UNAVAILABLE|NOHOST|NOPERM|DATAERR|IOERR|SOFTWARE|OSERR|NOUSER|PROTOCOL)' && return 1
-  echo "$line" | grep -Eqi 'fail|error|timed out|refused|denied' && return 1
-
-  echo "$line" | grep -Eq  'exitcode=EX_OK'   && return 0
-  echo "$line" | grep -Eq  'smtpstatus=250'   && return 0
-  echo "$line" | grep -Eq  "smtpmsg='250"     && return 0
-  echo "$line" | grep -Eq  "smtpmsg=\"250"    && return 0
-  echo "$line" | grep -Eqi '\bsent\b'         && return 0
-
+  local line="${1,,}"  # lowercase once; no subprocesses
+  # Explicit failure patterns
+  [[ "$line" =~ exitcode=ex_(tempfail|unavailable|nohost|noperm|dataerr|ioerr|software|oserr|nouser|protocol) ]] && return 1
+  [[ "$line" =~ (fail|error|timed\ out|refused|denied) ]] && return 1
+  # Success patterns
+  [[ "$line" =~ exitcode=ex_ok      ]] && return 0
+  [[ "$line" =~ smtpstatus=250      ]] && return 0
+  [[ "$line" =~ smtpmsg=.250        ]] && return 0
+  [[ "$line" =~ (^|[^a-z])sent([^a-z]|$) ]] && return 0
   return 1
 }
 
@@ -247,19 +201,17 @@ _check_recent_sent() {
   snap=$(_tail_safely "$log" "$LCHECK_MAX_LOG_LINES" || true)
   [[ -n "$snap" ]] || { printf 'WARN\nlog empty: %s\n' "$log"; return 0; }
 
-  local cutoff
-  cutoff=$(date -d "$days days ago" +%s 2>/dev/null || echo 0)
+  local cutoff_date
+  cutoff_date=$(date -d "$days days ago" +'%Y-%m-%d' 2>/dev/null || echo '0000-00-00')
 
   local found=0
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
     _msmtp_line_is_success "$line" || continue
-
-    if [[ "$line" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]][0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
-      local ts epoch
-      ts=${line:0:19}
-      epoch=$(date -d "$ts" +%s 2>/dev/null || echo 0)
-      (( epoch >= cutoff )) && { found=1; break; } || true
+    if [[ "$line" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}) ]]; then
+      # YYYY-MM-DD lexicographic order matches chronological order
+      [[ "${BASH_REMATCH[1]}" > "$cutoff_date" || "${BASH_REMATCH[1]}" == "$cutoff_date" ]] \
+        && { found=1; break; }
     else
       [[ -n "$age" ]] && (( age <= days )) && { found=1; break; } || true
     fi
@@ -274,91 +226,205 @@ _check_recent_sent() {
   fi
 }
 
-_check_patches_compute() {
-  # Uses apt-get dist-upgrade -s (sim mode) — same method as check-for-updates.sh.
-  # Phased updates are excluded because they won't actually be installed.
-  local issues=0 reasons=()
-
-  [[ -f /var/run/reboot-required ]] && { issues=$((issues+1)); reasons+=("reboot required"); }
-
-  # Check whether apt lists are stale using the dedicated stamp first.
-  local stamp age
-  for stamp in "$APT_UPDATE_STAMP" \
-               /var/lib/apt/periodic/update-success-stamp \
-               /var/lib/apt/periodic/apt-update-stamp-stable; do
-    if [[ -e "$stamp" ]]; then
-      age=$(_age_days_of_file "$stamp")
-      if [[ -n "$age" ]] && (( age > LCHECK_PATCH_STALE_DAYS )); then
-        issues=$((issues+1)); reasons+=("apt lists stale (${age}d)")
-      fi
-      break
-    fi
-  done
-
-  if _has_cmd apt-get; then
-    local upg
-    upg=$(DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -s 2>/dev/null \
-          | awk '/^Inst / {print $2}' | grep -c . || true)
-    if (( upg > 0 )); then
-      # Determine how many of those are security updates.
-      local actual upgradable_list sec pkg
-      actual=$(DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -s 2>/dev/null \
-               | awk '/^Inst / {print $2}' || true)
-      upgradable_list=$(apt list --upgradable 2>/dev/null | tail -n +2 || true)
-      sec=0
-      while IFS= read -r pkg; do
-        [[ -z "$pkg" ]] && continue
-        printf '%s\n' "$upgradable_list" | grep -qE "^${pkg}/.*security" && sec=$((sec+1))
-      done <<< "$actual"
-
-      if (( sec > 0 )); then
-        issues=$((issues+2)); reasons+=("${sec} security / ${upg} total update(s) pending")
-      else
-        issues=$((issues+1)); reasons+=("${upg} update(s) pending")
-      fi
-    fi
-  else
-    issues=$((issues+1)); reasons+=("apt-get not found")
-  fi
-
-  if (( issues == 0 )); then
-    printf 'OK\n'; printf '%s\n' "${reasons[*]}"
-  elif (( issues <= 2 )); then
-    printf 'WARN\n'; printf '%s\n' "${reasons[*]}"
-  else
-    printf 'CRITICAL\n'; printf '%s\n' "${reasons[*]}"
-  fi
-}
-
+# ---------------------------------------------------------------------------
+# Patch check — reads patch-state.json + patch-suppression.json via jq
+# §4.4 of DESIGN-check-for-updates-v4_2.md
+# ---------------------------------------------------------------------------
 _check_patches() {
-  local key="patch_result" ttl="$LCHECK_PATCH_CACHE_TTL"
+  # jq required
+  if ! _has_cmd jq; then
+    printf 'WARN\n'
+    printf 'jq not installed — cannot parse state file\n'
+    return 0
+  fi
 
-  if _cache_fresh "$key" "$ttl"; then
-    local cached
-    cached="$(_cache_value_get "$key" || true)"
-    if [[ -n "$cached" ]]; then
-      printf '%s' "$cached"
-      return 0
+  # Acquire shared flock on state-file lock to avoid reading a mid-rename file
+  local state_json supp_json
+
+  # State file is written atomically (tmp+rename) by the evaluator;
+  # no lock needed for a plain read.
+  if [[ ! -f "$STATE_FILE" ]]; then
+    printf 'WARN\n'
+    printf 'state file missing — evaluator may not have run\n'
+    return 0
+  fi
+
+  if [[ ! -r "$STATE_FILE" ]]; then
+    printf 'WARN\n'
+    printf 'state file not readable\n'
+    return 0
+  fi
+
+  state_json="$(cat "$STATE_FILE" 2>/dev/null)"
+
+  # Validate JSON
+  if ! printf '%s' "$state_json" | jq empty 2>/dev/null; then
+    printf 'WARN\n'
+    printf 'state file corrupt\n'
+    return 0
+  fi
+
+  local evaluated_at_str
+  evaluated_at_str="$(printf '%s' "$state_json" | jq -r '.evaluated_at // ""')"
+
+  # --- Two-tier staleness ---
+  # age_note carries a "(data Nh old)" annotation for the mildly-stale band;
+  # it is appended to the final verdict so a clean system stays OK and real
+  # pending patches still show through.  Only the "dead" tier overrides to WARN.
+  local age_note=""
+  if [[ -z "$evaluated_at_str" ]]; then
+    printf 'WARN\n'
+    printf 'state file missing evaluated_at field\n'
+    return 0
+  fi
+
+  local eval_epoch now_e age_secs
+  eval_epoch="$(_iso_to_epoch "$evaluated_at_str")"
+  if [[ -z "$eval_epoch" ]]; then
+    # Unparseable timestamp is a distinct condition from "old": do not fabricate
+    # an age from epoch 0 (which would always read as stale).
+    printf 'WARN\n'
+    printf 'state file evaluated_at unparseable: %s\n' "$evaluated_at_str"
+    return 0
+  fi
+  now_e="$(_now_epoch)"
+  age_secs=$(( now_e - eval_epoch ))
+
+  if (( age_secs > DEAD_THRESHOLD_SECS )); then
+    # Evaluator looks dead — the data can no longer be trusted.
+    printf 'WARN\n'
+    printf 'evaluator appears dead — state file last evaluated %dd ago (expected daily)\n' \
+      "$(( age_secs / 86400 ))"
+    return 0
+  elif (( age_secs > STALE_THRESHOLD_SECS )); then
+    # Mildly stale: keep reading the real verdict, annotate with the age.
+    age_note=" (data $(( age_secs / 3600 ))h old)"
+  fi
+
+  # apt_update_failed → CRITICAL (F4)
+  local apt_update_failed
+  apt_update_failed="$(printf '%s' "$state_json" | jq -r '.apt_update_failed // false')"
+  if [[ "$apt_update_failed" == "true" ]]; then
+    printf 'CRITICAL\n'
+    printf 'apt-get update failed — package list stale; this host may be missing security updates\n'
+    return 0
+  fi
+
+  # Reboot required → CRITICAL
+  local reboot_required
+  reboot_required="$(printf '%s' "$state_json" | jq -r '.reboot_required // false')"
+  if [[ "$reboot_required" == "true" ]]; then
+    printf 'CRITICAL\n'
+    printf 'reboot required\n'
+    return 0
+  fi
+
+  # Read suppression file (shared flock)
+  supp_json='{"schema":2,"suppressions":[]}'
+  if [[ -f "$SUPP_FILE" ]]; then
+    exec 9<"${SUPP_LOCK}" 2>/dev/null || true
+    if flock -s -w 2 9 2>/dev/null; then
+      local raw_supp
+      raw_supp="$(cat "$SUPP_FILE" 2>/dev/null)"
+      exec 9>&-
+      if printf '%s' "$raw_supp" | jq empty 2>/dev/null; then
+        supp_json="$raw_supp"
+      fi
+    else
+      exec 9>&- 2>/dev/null || true
     fi
   fi
 
-  local out
-  out="$(_check_patches_compute)"
-  printf '%s' "$out"
-  _cache_value_set "$key" "$out"
-  _cache_time_set "$key" "$(_now_epoch)"
+  local now_e2
+  now_e2="$(_now_epoch)"
+
+  # Categorise confirmed packages
+  local confirmed_json unconfirmed_json
+  confirmed_json="$(printf '%s' "$state_json" | jq \
+    --argjson t "$SEEN_COUNT_THRESHOLD" \
+    '[.packages[] | select(.seen_count >= $t)]')"
+  unconfirmed_json="$(printf '%s' "$state_json" | jq \
+    --argjson t "$SEEN_COUNT_THRESHOLD" \
+    '[.packages[] | select(.seen_count < $t)]')"
+
+  local confirmed_count unconfirmed_count
+  confirmed_count="$(printf '%s' "$confirmed_json" | jq 'length')"
+  unconfirmed_count="$(printf '%s' "$unconfirmed_json" | jq 'length')"
+
+  # Among confirmed, split unsuppressed vs suppressed
+  local unsuppressed_count=0 suppressed_count=0
+
+  if [[ "$confirmed_count" -gt 0 ]]; then
+    local i
+    for (( i=0; i<confirmed_count; i++ )); do
+      local name arch ver
+      name="$(printf '%s' "$confirmed_json" | jq -r ".[$i].name")"
+      arch="$(printf '%s' "$confirmed_json" | jq -r ".[$i].architecture")"
+      ver="$(printf '%s' "$confirmed_json" | jq -r ".[$i].candidate_version")"
+
+      # Check suppression
+      local supp_obj until_str until_epoch
+      supp_obj="$(printf '%s' "$supp_json" | jq \
+        --arg n "$name" --arg a "$arch" --arg v "$ver" \
+        '.suppressions[] | select(.name==$n and .architecture==$a and .candidate_version==$v)' \
+        2>/dev/null)"
+
+      if [[ -n "$supp_obj" ]]; then
+        until_str="$(printf '%s' "$supp_obj" | jq -r '.suppressed_until // ""')"
+        if [[ -n "$until_str" ]]; then
+          until_epoch="$(_iso_to_epoch "$until_str")"
+          if (( until_epoch > now_e2 )); then
+            (( suppressed_count++ ))
+            continue
+          fi
+        fi
+      fi
+      (( unsuppressed_count++ ))
+    done
+  fi
+
+  # --- Determine banner ---
+  # age_note (possibly empty) annotates the reason line when the data is mildly
+  # stale; it never changes the verdict itself.
+  if (( unsuppressed_count > 0 )); then
+    printf 'CRITICAL\n'
+    printf '%d update(s) pending%s\n' "$unsuppressed_count" "$age_note"
+  elif (( suppressed_count > 0 && unconfirmed_count > 0 )); then
+    printf 'WARN\n'
+    printf '%d suppressed — alert sent, not yet patched; %d awaiting cross-run confirmation%s\n' \
+      "$suppressed_count" "$unconfirmed_count" "$age_note"
+  elif (( suppressed_count > 0 )); then
+    printf 'WARN\n'
+    printf '%d suppressed — alert sent, not yet patched%s\n' "$suppressed_count" "$age_note"
+  elif (( unconfirmed_count > 0 )); then
+    printf 'WARN\n'
+    printf '%d awaiting cross-run confirmation%s\n' "$unconfirmed_count" "$age_note"
+  else
+    printf 'OK\n'
+    printf '%s\n' "${age_note# }"
+  fi
 }
 
+# ---------------------------------------------------------------------------
+# Status icon
+# ---------------------------------------------------------------------------
 _status_icon() {
-  local GREEN='\033[0;32m' YELLOW='\033[0;33m' RED='\033[0;31m' RESET='\033[0m'
+  if [[ -t 1 ]]; then
+    local GREEN='\033[0;32m' YELLOW='\033[0;33m' RED='\033[0;31m' RESET='\033[0m'
+  else
+    local GREEN='' YELLOW='' RED='' RESET=''
+  fi
   case "$1" in
-    OK)       printf '%b%s%b' "$GREEN" '✔ OK'       "$RESET" ;;
-    WARN)     printf '%b%s%b' "$YELLOW" '⚠ WARN'    "$RESET" ;;
-    CRITICAL) printf '%b%s%b' "$RED"   '✘ CRITICAL' "$RESET" ;;
+    OK)       printf '%b%s%b' "$GREEN" 'OK'       "$RESET" ;;
+    WARN)     printf '%b%s%b' "$YELLOW" 'WARN'    "$RESET" ;;
+    CRITICAL) printf '%b%s%b' "$RED"   'CRITICAL' "$RESET" ;;
     *)        printf '%s' "$1" ;;
   esac
 }
 
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 main() {
   local e_s e_r m_s m_r p_s p_r
 
@@ -374,7 +440,12 @@ main() {
   if (( LCHECK_VERBOSE == 1 )); then
     [[ "$e_s" == "OK" ]] || printf '  Email: %s\n' "${e_r:-no details}"
     [[ "$m_s" == "OK" ]] || printf '  Sent: %s\n' "${m_r:-no details}"
-    [[ "$p_s" == "OK" ]] || printf '  Patches: %s\n' "${p_r:-no details}"
+    # Patches: print when not OK, OR when OK but carrying a staleness note.
+    if [[ "$p_s" != "OK" ]]; then
+      printf '  Patches: %s\n' "${p_r:-no details}"
+    elif [[ -n "$p_r" ]]; then
+      printf '  Patches: OK %s\n' "$p_r"
+    fi
   fi
 }
 
