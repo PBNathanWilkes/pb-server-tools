@@ -613,8 +613,11 @@ if [[ -d $EDM_INSTALL ]]; then
   # Count archives.  Use || true so pipefail does not fire when find exits
   # non-zero (e.g. a transient permission warning on a subdirectory).
   # Trim whitespace from wc -l output before integer comparison.
+  # Note: run as root directly — NoNewPrivileges=true in the service unit
+  # prevents sudo from opening /etc/sudoers, so sudo -u emaildns silently
+  # fails.  The backup directory is 0755 so root can read it without sudo.
   _edm_archive_count=0
-  _edm_archive_count=$(sudo -u emaildns find "$EDM_BACKUP" \
+  _edm_archive_count=$(find "$EDM_BACKUP" \
     -maxdepth 1 -name 'email-dns-monitor-state-*.tar.gz' \
     2>/dev/null | wc -l || true)
   _edm_archive_count="${_edm_archive_count//[[:space:]]/}"
@@ -627,7 +630,7 @@ if [[ -d $EDM_INSTALL ]]; then
   else
     # Find the most-recent archive mtime via find -printf; newest first, take top line.
     # || true: same pipefail guard as the count pipeline above.
-    _edm_newest_mtime=$(sudo -u emaildns find "$EDM_BACKUP" \
+    _edm_newest_mtime=$(find "$EDM_BACKUP" \
       -maxdepth 1 -name 'email-dns-monitor-state-*.tar.gz' \
       -printf '%T@\n' 2>/dev/null \
       | sort -rn | head -1 || true)

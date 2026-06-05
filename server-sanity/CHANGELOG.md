@@ -4,6 +4,26 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.7.1] — 2026-06-05
+
+### Fixed
+
+- **EDM backup archive check uses direct `find` instead of `sudo -u emaildns find`.**
+  The `pb-server-sanity-check.service` unit has `NoNewPrivileges=true`, which
+  prevents `sudo` from opening `/etc/sudoers` when called from within the
+  service context.  The `find` call failed silently (stderr suppressed by
+  `2>/dev/null`; `|| true` swallowed the pipeline failure), leaving
+  `_edm_archive_count=0` and producing a spurious `_fail` even when archives
+  exist.  The backup directory is mode 0755 so root can read it directly;
+  `sudo -u emaildns` was never necessary.  Updated the comment block to
+  document the `NoNewPrivileges` constraint.
+
+### Files changed
+
+- `src/server-sanity-check.sh`
+
+---
+
 ## [1.7.0] — 2026-06-03
 
 ### Added
