@@ -603,8 +603,8 @@ if [[ -d $EDM_INSTALL ]]; then
   check_dir_owner "$EDM_BACKUP"     emaildns
 
   # Backup archive recency — EDM writes email-dns-monitor-state-*.tar.gz to
-  # $EDM_BACKUP on each run.  The directory is 0700 emaildns:emaildns so root
-  # cannot stat it directly; all find calls must use sudo -u emaildns.
+  # $EDM_BACKUP on each run.  The directory is 0750 emaildns:emaildns so root
+  # can stat it directly; no privilege switch is required.
   #
   # Thresholds: count = 0 → _fail (no archives ever written);
   #             most-recent mtime > 48 h → _fail (service stale or backups broken);

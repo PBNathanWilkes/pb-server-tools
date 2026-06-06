@@ -4,23 +4,28 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [1.7.1] — 2026-06-05
+## [1.7.1] — 2026-06-06
 
 ### Fixed
 
-- **EDM backup archive check uses direct `find` instead of `sudo -u emaildns find`.**
-  The `pb-server-sanity-check.service` unit has `NoNewPrivileges=true`, which
-  prevents `sudo` from opening `/etc/sudoers` when called from within the
-  service context.  The `find` call failed silently (stderr suppressed by
-  `2>/dev/null`; `|| true` swallowed the pipeline failure), leaving
-  `_edm_archive_count=0` and producing a spurious `_fail` even when archives
-  exist.  The backup directory is mode 0755 so root can read it directly;
-  `sudo -u emaildns` was never necessary.  Updated the comment block to
-  document the `NoNewPrivileges` constraint.
+- **Section 2 — EDM backup archive check: `sudo -u emaildns find` fails under
+  systemd:** the sanity check service runs as root with `StandardInput=null`
+  (no controlling terminal).  `/etc/sudoers` sets `Defaults use_pty`, which
+  requires sudo to allocate a PTY — impossible in a tty-less systemd context.
+  The `sudo` call exited non-zero, stderr was suppressed by `2>/dev/null`,
+  `wc -l` received empty input, and the archive count was coerced to 0,
+  producing a spurious `_fail "backup archives: none found"` on every
+  scheduled run.  Interactive runs succeeded because the operator's terminal
+  provided the required PTY.
+  Fixed by changing `/var/backups/email-dns-monitor` from `0700` to `0750`
+  on the production host and removing `sudo -u emaildns` from both `find`
+  calls in the archive count and mtime pipelines.  Root can now stat the
+  directory directly.  Closes `OPEN-ITEM-edm-install-backup-find-root.md`.
 
 ### Files changed
 
-- `src/server-sanity-check.sh`
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md` (this file)
 
 ---
 
