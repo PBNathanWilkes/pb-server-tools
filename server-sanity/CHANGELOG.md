@@ -4,6 +4,29 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.7.2] — 2026-06-07
+
+### Changed
+
+- **Section 8 — Server Sanity Check (self): removed previous-run journal
+  check (`SANITY_CHECK_RESULT` parse block).**  The check read the prior
+  scheduled run's journal line and failed if it contained `fail>0`.  This
+  created a self-referential one-day lag: a genuine failure on day N caused
+  a spurious failure on day N+1 (echoing the prior result), which in turn
+  caused another spurious failure on day N+2 (because day N+1 also had
+  `fail=1`).  The only exit was a manual trigger or waiting for a
+  coincidentally clean prior run.  The check added no actionable signal —
+  any real failure is detected directly by the current run.  The self section
+  now covers: binary present, permissions correct, timer active, last service
+  exit code.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md` (this file)
+
+---
+
 ## [1.7.1] — 2026-06-06
 
 ### Fixed

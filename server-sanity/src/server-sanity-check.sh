@@ -613,9 +613,6 @@ if [[ -d $EDM_INSTALL ]]; then
   # Count archives.  Use || true so pipefail does not fire when find exits
   # non-zero (e.g. a transient permission warning on a subdirectory).
   # Trim whitespace from wc -l output before integer comparison.
-  # Note: run as root directly — NoNewPrivileges=true in the service unit
-  # prevents sudo from opening /etc/sudoers, so sudo -u emaildns silently
-  # fails.  The backup directory is 0755 so root can read it without sudo.
   _edm_archive_count=0
   _edm_archive_count=$(find "$EDM_BACKUP" \
     -maxdepth 1 -name 'email-dns-monitor-state-*.tar.gz' \
@@ -976,39 +973,6 @@ fi
 
 check_timer    pb-server-sanity-check.timer
 check_last_run pb-server-sanity-check.service
-
-# Parse the SANITY_CHECK_RESULT journal line from the most recent completed
-# run to detect check-level failures that systemd does not surface (the unit
-# uses SuccessExitStatus=0 1, so a run with failures is still "success" at the
-# systemd level).  A missing journal line is a warning — expected on a freshly
-# provisioned host.
-#
-# --until bounds the query to before this run started so the previous run's
-# line is found whether we are running interactively or via systemd.  An
-# interactive run writes SANITY_CHECK_RESULT to the terminal (stderr), not to
-# the journal, so the current run's line is never present at query time.
-_sanity_until=$(date -d "@$(( _START / 1000000000 ))" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || true)
-_sanity_journal_line=$(journalctl -t pb-server-sanity --no-pager \
-  ${_sanity_until:+--until="$_sanity_until"} 2>/dev/null \
-  | grep 'SANITY_CHECK_RESULT' | tail -1 || true)
-
-if [[ -z $_sanity_journal_line ]]; then
-  _warn "last run journal: no SANITY_CHECK_RESULT line found (new host or journal rotated)"
-else
-  _sanity_fail_count=$(echo "$_sanity_journal_line" | grep -oE 'fail=[0-9]+' | cut -d= -f2 || echo "?")
-  _sanity_warn_count=$(echo "$_sanity_journal_line" | grep -oE 'warn=[0-9]+' | cut -d= -f2 || echo "?")
-  _sanity_pass_count=$(echo "$_sanity_journal_line" | grep -oE 'pass=[0-9]+' | cut -d= -f2 || echo "?")
-  _sanity_elapsed=$(   echo "$_sanity_journal_line" | grep -oE 'elapsed_ms=[0-9]+' | cut -d= -f2 || echo "?")
-
-  if [[ $_sanity_fail_count == "0" ]]; then
-    _ok  "last run checks: pass=${_sanity_pass_count} fail=${_sanity_fail_count} warn=${_sanity_warn_count}  (${_sanity_elapsed}ms)"
-  else
-    _fail "last run checks: pass=${_sanity_pass_count} fail=${_sanity_fail_count} warn=${_sanity_warn_count}  (${_sanity_elapsed}ms)"
-    _note "The last scheduled run detected ${_sanity_fail_count} failure(s) — review the journal:"
-    _note "  journalctl -u pb-server-sanity-check --no-pager | tail -100"
-  fi
-fi
-
 
 # =============================================================================
 # ── SECTION 9: Required services ─────────────────────────────────────────────
