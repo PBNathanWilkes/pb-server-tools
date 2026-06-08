@@ -4,6 +4,61 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.8.0] — 2026-06-08
+
+### Added
+
+- **Sections 2–4 — full secondary timer coverage:** the sanity check
+  previously monitored only the primary operational timer for each application
+  (EDM `email-dns-monitor.timer`, BM `balena-monitor-daily.timer`, SPE
+  `sharepoint-export-daily.timer`).  All remaining timers for each application
+  are now checked with `check_timer` + `check_last_run`, so a silently
+  inactive or failing timer is surfaced at the next scheduled sanity run
+  rather than going undetected indefinitely.
+
+  **Email DNS Monitor (7 new timer/service pairs):**
+  - `email-dns-monitor-summary.timer` / `.service` — weekly summary email
+    (Sun 08:00)
+  - `email-dns-monitor-problems.timer` / `.service` — weekly problems report
+    (Mon 07:00)
+  - `email-dns-monitor-registrar.timer` / `.service` — daily registrar and
+    expiry monitoring (03:15)
+  - `email-dns-monitor-drift.timer` / `.service` — quarterly posture drift
+    report (1st Jan/Apr/Jul/Oct 09:15)
+  - `email-dns-monitor-backup.timer` / `.service` — daily state backup (02:00)
+  - `email-dns-monitor-history-backup.timer` / `.service` — weekly history
+    backup (Sun 08:30)
+  - `email-dns-monitor-prune.timer` / `.service` — weekly history pruning
+    (Sun 08:15)
+
+  **Balena Monitor (7 new timer/service pairs):**
+  - `balena-monitor-weekly.timer` / `.service` — weekly status report
+    (Mon 10:00)
+  - `balena-monitor-monthly-report.timer` / `.service` — monthly fleet report
+    (1st 09:00)
+  - `balena-monitor-suppression.timer` / `.service` — monthly suppression
+    report (1st 09:00)
+  - `balena-monitor-backup.timer` / `.service` — daily state backup (02:00)
+  - `balena-monitor-history-backup.timer` / `.service` — weekly history
+    backup (Sun 03:00)
+  - `balena-monitor-history-maintenance.timer` / `.service` — daily history
+    maintenance (02:00)
+  - `balena-monitor-permissions.timer` / `.service` — daily permissions check
+    (03:15)
+
+  **SharePoint Export (3 new timer/service pairs):**
+  - `sharepoint-export-monthly.timer` / `.service` — monthly report
+    (1st 06:30)
+  - `sharepoint-export-backup.timer` / `.service` — daily state backup (05:30)
+  - `sharepoint-export-log-prune.timer` / `.service` — weekly log pruning
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md` (this file)
+
+---
+
 ## [1.7.2] — 2026-06-07
 
 ### Changed

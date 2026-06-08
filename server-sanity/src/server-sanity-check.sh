@@ -705,9 +705,33 @@ if [[ -d $EDM_INSTALL ]]; then
     PARALLEL_QUERIES MAX_ALERTS_PER_RUN DNS_FAILURE_ALERT_THRESHOLD \
     HISTORY_RETAIN_DAYS
 
-  # Primary timer + last run
-  check_timer   email-dns-monitor.timer
+  # Primary monitor timer + last run
+  check_timer    email-dns-monitor.timer
   check_last_run email-dns-monitor.service
+
+  # Report timers — weekly summary (Sun 08:00) and weekly problems (Mon 07:00).
+  # Silent failure here means reports are not being delivered.
+  check_timer    email-dns-monitor-summary.timer
+  check_last_run email-dns-monitor-summary.service
+  check_timer    email-dns-monitor-problems.timer
+  check_last_run email-dns-monitor-problems.service
+
+  # Registrar / expiry monitoring — daily (03:15).
+  check_timer    email-dns-monitor-registrar.timer
+  check_last_run email-dns-monitor-registrar.service
+
+  # Quarterly drift report (1st of Jan/Apr/Jul/Oct 09:15).
+  check_timer    email-dns-monitor-drift.timer
+  check_last_run email-dns-monitor-drift.service
+
+  # Maintenance timers — backup (daily 02:00), history-backup (weekly Sun 08:30),
+  # prune (weekly Sun 08:15).
+  check_timer    email-dns-monitor-backup.timer
+  check_last_run email-dns-monitor-backup.service
+  check_timer    email-dns-monitor-history-backup.timer
+  check_last_run email-dns-monitor-history-backup.service
+  check_timer    email-dns-monitor-prune.timer
+  check_last_run email-dns-monitor-prune.service
 
 else
   _skip "not installed on this host (${EDM_INSTALL} absent)"
@@ -755,8 +779,29 @@ if [[ -d $BM_INSTALL ]]; then
     _warn "state:   fleet_health_history.json not present (written after first run)"
   fi
 
+  # Primary daily monitor timer + last run
   check_timer    balena-monitor-daily.timer
   check_last_run balena-monitor-daily.service
+
+  # Report timers — weekly status (Mon 10:00), monthly fleet report (1st 09:00),
+  # monthly suppression report (1st 09:00).  Silent failure = no reports delivered.
+  check_timer    balena-monitor-weekly.timer
+  check_last_run balena-monitor-weekly.service
+  check_timer    balena-monitor-monthly-report.timer
+  check_last_run balena-monitor-monthly-report.service
+  check_timer    balena-monitor-suppression.timer
+  check_last_run balena-monitor-suppression.service
+
+  # Maintenance timers — backup (daily 02:00), history-backup (weekly Sun 03:00),
+  # history-maintenance (daily 02:00), permissions (daily 03:15).
+  check_timer    balena-monitor-backup.timer
+  check_last_run balena-monitor-backup.service
+  check_timer    balena-monitor-history-backup.timer
+  check_last_run balena-monitor-history-backup.service
+  check_timer    balena-monitor-history-maintenance.timer
+  check_last_run balena-monitor-history-maintenance.service
+  check_timer    balena-monitor-permissions.timer
+  check_last_run balena-monitor-permissions.service
 
 else
   _skip "not installed on this host (${BM_INSTALL} absent)"
@@ -831,8 +876,19 @@ if [[ -d $SP_INSTALL ]]; then
     esac
   done <<< "$_sp_paths"
 
+  # Primary daily export timer + last run
   check_timer    sharepoint-export-daily.timer
   check_last_run sharepoint-export-daily.service
+
+  # Report timer — monthly report (1st 06:30).
+  check_timer    sharepoint-export-monthly.timer
+  check_last_run sharepoint-export-monthly.service
+
+  # Maintenance timers — backup (daily 05:30), log-prune (weekly).
+  check_timer    sharepoint-export-backup.timer
+  check_last_run sharepoint-export-backup.service
+  check_timer    sharepoint-export-log-prune.timer
+  check_last_run sharepoint-export-log-prune.service
 
 else
   _skip "not installed on this host (${SP_INSTALL} absent)"
