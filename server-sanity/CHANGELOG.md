@@ -4,6 +4,22 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.8.1] — 2026-06-10
+
+### Fixed
+
+- **`overrides/pblinuxutility/server-sanity.conf`: `glow` moved from
+  `REQUIRED_SNAP_PACKAGES` to `REQUIRED_APT_PACKAGES`.** `glow` is
+  installed via apt on pblinuxutility (`/usr/bin/glow`); the snap entry
+  was a false failure on every sanity run.
+
+### Files changed
+
+- `overrides/pblinuxutility/server-sanity.conf`
+- `server-sanity/CHANGELOG.md` (this file)
+
+---
+
 ## [1.8.0] — 2026-06-08
 
 ### Added
@@ -135,7 +151,8 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
   is empty.
 - **`overrides/pblinuxutility/server-sanity.conf`:** added
   `REQUIRED_APT_PACKAGES=(pandoc wkhtmltopdf)`, `REQUIRED_SNAP_PACKAGES=(glow)`,
-  `REQUIRED_SERVICES=()`.
+  `REQUIRED_SERVICES=()`. *(Note: `glow` later moved to `REQUIRED_APT_PACKAGES`
+  in v1.8.1 — it is installed via apt on pblinuxutility.)*
 - **`overrides/PBWEBSRV03/server-sanity.conf`:** added
   `REQUIRED_APT_PACKAGES=()`, `REQUIRED_SNAP_PACKAGES=()`,
   `REQUIRED_SERVICES=("cloudflared.service|Cloudflare tunnel")`.
