@@ -379,19 +379,50 @@ check_last_run() {
 }
 
 # check_no_lockfile <path>
+# EDM uses flock(2)-based advisory locking.  The lock file persists on disk
+# after every clean run — the kernel releases the advisory lock when the
+# holding process exits, but the file remains.  Testing for file presence
+# alone therefore produces a false positive after every normal run.
+#
+# This function opens an fd on the lock file and attempts flock --nonblock:
+#   • Lock acquired  → no process holds it; the file is a normal post-run
+#                      artifact.  Release immediately and report OK.
+#   • Lock not acquired → a run is genuinely active.  Use age-based logic
+#                         to distinguish in-progress (≤3600s) from stuck (>3600s).
+#   • File absent    → OK (first run, or previously cleaned up).
 check_no_lockfile() {
   local lf=$1
-  if [[ -f $lf ]]; then
-    # Check age to distinguish "actively running" from "stale"
+
+  if [[ ! -f $lf ]]; then
+    _ok  "no lock file: $lf"
+    return
+  fi
+
+  # Open a read fd on the lock file and try a non-blocking flock.
+  # Bash 4.1+ automatic fd allocation: exec {fd}< avoids hard-coding an fd.
+  local fd
+  exec {fd}<"$lf" 2>/dev/null || {
+    # Cannot open fd (permissions, race on deletion) — fall back to OK;
+    # the file is not meaningfully locked if we cannot even open it.
+    _ok  "lock file present but not openable (post-run artifact): $lf"
+    return
+  }
+
+  if flock --nonblock "$fd" 2>/dev/null; then
+    # Lock acquired — no process holds it.  Release and report clean.
+    flock --unlock "$fd" 2>/dev/null || true
+    exec {fd}>&- 2>/dev/null || true
+    _ok  "lock file present, not held (normal post-run artifact): $lf"
+  else
+    # Lock is held — a run is active.  Use age to distinguish stuck from normal.
+    exec {fd}>&- 2>/dev/null || true
     local age
     age=$(( $(date +%s) - $(stat -c '%Y' "$lf" 2>/dev/null || echo 0) ))
     if (( age > 3600 )); then
-      _fail "stale lock file: $lf  (age: ${age}s — possible stuck run)"
+      _fail "lock file held for ${age}s — possible stuck run: $lf"
     else
-      _warn "lock file present: $lf  (age: ${age}s — run may be in progress)"
+      _warn "lock file held (${age}s) — run in progress: $lf"
     fi
-  else
-    _ok  "no stale lock file"
   fi
 }
 

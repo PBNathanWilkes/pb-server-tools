@@ -4,6 +4,34 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.8.2] — 2026-06-13
+
+### Fixed
+
+- **`check_no_lockfile`: false positive on every clean EDM run.** EDM uses
+  `flock(2)`-based advisory locking.  The lock file persists on disk after
+  every normal run — the kernel releases the advisory lock when the holding
+  process exits, but the file is not removed.  The previous implementation
+  tested only for file presence, so every sanity check that ran between EDM
+  cycles produced a spurious `⚠ lock file present` warning regardless of
+  whether any process was actually holding the lock.
+  Fixed by opening an fd on the lock file and calling `flock --nonblock`
+  before falling back to age-based logic:
+  - Lock acquired immediately → no process holds it; normal post-run
+    artifact; report `_ok` and release.
+  - Lock not acquired → a run is genuinely active; use age to distinguish
+    in-progress (≤3600 s → `_warn`) from stuck (>3600 s → `_fail`).
+  - File absent → `_ok` (unchanged).
+  Uses Bash 4.1+ automatic fd allocation (`exec {fd}<`) to avoid
+  hard-coding a file descriptor number.
+
+### Files changed
+
+- `server-sanity/src/server-sanity-check.sh`
+- `server-sanity/CHANGELOG.md` (this file)
+
+---
+
 ## [1.8.1] — 2026-06-10
 
 ### Fixed
